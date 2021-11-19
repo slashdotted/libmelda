@@ -45,12 +45,13 @@ enum FetchedObject {
 impl DataStorage {
     /// Constructs a new Data storage based on the provided adapter
     pub fn new(adapter: Arc<RwLock<Box<dyn Adapter>>>) -> DataStorage {
+        let cache_size = std::env::var("MELDA_DATA_CACHE_CAP").unwrap_or("16".to_string()).parse::<u32>().unwrap() as usize;
         DataStorage {
             adapter,
             pack: HashMap::<String, Value>::new(),
             objects: HashMap::<String, (String, usize, usize)>::new(),
             cache: Mutex::new(RefCell::new(LruCache::<String, Map<String, Value>>::new(
-                512,
+                cache_size,
             ))),
         }
     }
