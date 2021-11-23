@@ -36,8 +36,8 @@ impl RevisionTree {
 
     /// Returns the winning revision
     pub fn winner(&self) -> Option<&Revision> {
-        match self.leafs().last() {
-            Some(r) => Some(*r),
+        match self.revisions.last() {
+            Some((r, _)) => Some(r),
             None => None,
         }
     }
@@ -146,12 +146,8 @@ mod tests {
             crate::revision::Revision::from("2-abc_cde").ok(),
         );
         rt.add(
-            crate::revision::Revision::from("4-bob_cde").unwrap(),
+            crate::revision::Revision::from("4-resolved_cde").unwrap(),
             crate::revision::Revision::from("3-aaa_cde").ok(),
-        );
-        rt.add(
-            crate::revision::Revision::from("5-resolved_cde").unwrap(),
-            crate::revision::Revision::from("4-bob_cde").ok(),
         );
         rt.add(crate::revision::Revision::from("1-abc").unwrap(), None);
         rt.add(
@@ -159,6 +155,6 @@ mod tests {
             crate::revision::Revision::from("1-abc").ok(),
         );
         let w = rt.winner().unwrap();
-        assert!(w.to_string() == "2-abc_cde");
+        assert!(w.to_string() == "3-xyz_cde");
     }
 }
