@@ -36,8 +36,8 @@ impl RevisionTree {
 
     /// Returns the winning revision
     pub fn winner(&self) -> Option<&Revision> {
-        match self.revisions.last() {
-            Some((r, _)) => Some(r),
+        match self.leafs().last() {
+            Some(r) => Some(*r),
             None => None,
         }
     }
@@ -65,18 +65,16 @@ impl RevisionTree {
 
     /// Returns the parent of a revision
     pub fn parent(&self, revision: &Revision) -> Option<&Revision> {
-        self.revisions.iter().find_map(
-            |(rev, parent)| {
-                if rev == revision {
-                    match parent {
-                        Some(parent) => Some(parent),
-                        None => None
-                    }
-                } else {
-                    None
+        self.revisions.iter().find_map(|(rev, parent)| {
+            if rev == revision {
+                match parent {
+                    Some(parent) => Some(parent),
+                    None => None,
                 }
-            },
-        )
+            } else {
+                None
+            }
+        })
     }
 
     /// Returns the path to a revision (digest only)
@@ -119,12 +117,12 @@ impl RevisionTree {
                     let rev = Revision::new(index, digest, Some(&pr));
                     self.add(rev.clone(), Some(pr.clone()));
                     p = Some(rev);
-                },
+                }
                 None => {
                     let rev = Revision::new(index, digest, None);
                     self.add(rev.clone(), None);
                     p = Some(rev);
-                },
+                }
             }
             index += 1;
         });
@@ -148,18 +146,19 @@ mod tests {
             crate::revision::Revision::from("2-abc_cde").ok(),
         );
         rt.add(
-            crate::revision::Revision::from("4-resolved_cde").unwrap(),
+            crate::revision::Revision::from("4-bob_cde").unwrap(),
             crate::revision::Revision::from("3-aaa_cde").ok(),
         );
         rt.add(
-            crate::revision::Revision::from("1-abc").unwrap(),
-            None,
+            crate::revision::Revision::from("5-resolved_cde").unwrap(),
+            crate::revision::Revision::from("4-bob_cde").ok(),
         );
+        rt.add(crate::revision::Revision::from("1-abc").unwrap(), None);
         rt.add(
             crate::revision::Revision::from("2-abc_cde").unwrap(),
-            crate::revision::Revision::from("1-abc").ok()
+            crate::revision::Revision::from("1-abc").ok(),
         );
         let w = rt.winner().unwrap();
-        assert!(w.to_string() == "3-xyz_cde");
+        assert!(w.to_string() == "2-abc_cde");
     }
 }

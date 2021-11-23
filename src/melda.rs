@@ -82,8 +82,12 @@ impl Melda {
                         Some(delta) => {
                             // The delta was created
                             let delta_digest = digest_object(&delta)?;
-                            let rev =
-                                Revision::new_with_delta(w.index + 1, digest, delta_digest, Some(&w));
+                            let rev = Revision::new_with_delta(
+                                w.index + 1,
+                                digest,
+                                delta_digest,
+                                Some(&w),
+                            );
                             drop(docs);
                             self.documents
                                 .write()
@@ -94,10 +98,11 @@ impl Melda {
                             drop(data);
                             let mut data = self.data.write().unwrap();
                             data.write_object(&rev, obj, Some(delta))?;
-                            self.revision_update_records
-                                .write()
-                                .unwrap()
-                                .push((uuid, rev, Some(w)));
+                            self.revision_update_records.write().unwrap().push((
+                                uuid,
+                                rev,
+                                Some(w),
+                            ));
                         }
                         None => {
                             // There were no delta fields or the object should not be "delta-ed"
@@ -108,10 +113,11 @@ impl Melda {
                             drop(data);
                             let mut data = self.data.write().unwrap();
                             data.write_object(&rev, obj, None)?;
-                            self.revision_update_records
-                                .write()
-                                .unwrap()
-                                .push((uuid, rev, Some(w)));
+                            self.revision_update_records.write().unwrap().push((
+                                uuid,
+                                rev,
+                                Some(w),
+                            ));
                         }
                     }
                 }
@@ -132,10 +138,11 @@ impl Melda {
                 if !w.is_deleted() && !w.is_resolved() {
                     let rev = Revision::new_deleted(&w);
                     rt.add(rev.clone(), Some(w.clone()));
-                    self.revision_update_records
-                        .write()
-                        .unwrap()
-                        .push((uuid.clone(), rev, Some(w)));
+                    self.revision_update_records.write().unwrap().push((
+                        uuid.clone(),
+                        rev,
+                        Some(w),
+                    ));
                 }
                 Ok(())
             }
@@ -194,7 +201,11 @@ impl Melda {
                         ];
                         changes.push(Value::from(quad));
                     } else {
-                        let triple = vec![uuid.clone(), prev.as_ref().unwrap().to_string(), rev.digest.clone()];
+                        let triple = vec![
+                            uuid.clone(),
+                            prev.as_ref().unwrap().to_string(),
+                            rev.digest.clone(),
+                        ];
                         changes.push(Value::from(triple));
                     }
                 }
@@ -328,8 +339,11 @@ impl Melda {
                                         .as_str()
                                         .ok_or(anyhow!("expecting_digest_string"))?;
                                     let prev = Revision::from(prev)?;
-                                    let r =
-                                        Revision::new(prev.index + 1, digest.to_string(), Some(&prev));
+                                    let r = Revision::new(
+                                        prev.index + 1,
+                                        digest.to_string(),
+                                        Some(&prev),
+                                    );
                                     if !self.documents.read().unwrap().contains_key(uuid) {
                                         let mut rt = RevisionTree::new();
                                         rt.add(r, Some(prev));
@@ -511,10 +525,11 @@ impl Melda {
                     let rev = Revision::new_deleted(&w);
                     log::debug!("deleted {}: {} -> {}", uuid, w.to_string(), rev.to_string());
                     rt.add(rev.clone(), Some(w.clone()));
-                    self.revision_update_records
-                        .write()
-                        .unwrap()
-                        .push((uuid.clone(), rev, Some(w)));
+                    self.revision_update_records.write().unwrap().push((
+                        uuid.clone(),
+                        rev,
+                        Some(w),
+                    ));
                 }
             });
         drop(docs_w);
@@ -539,7 +554,8 @@ impl Melda {
                     if let Some(delta) = delta {
                         // The delta was created
                         let delta_digest = digest_object(&delta).unwrap();
-                        let rev = Revision::new_with_delta(w.index + 1, digest, delta_digest, Some(&w));
+                        let rev =
+                            Revision::new_with_delta(w.index + 1, digest, delta_digest, Some(&w));
                         log::debug!("update {}: {} -> {}", uuid, w.to_string(), rev.to_string());
                         let mut docs_w = self.documents.write().unwrap();
                         let rt = docs_w.get_mut(uuid).unwrap();
@@ -548,10 +564,11 @@ impl Melda {
                         let mut data_w = self.data.write().unwrap();
                         data_w.write_object(&rev, obj.clone(), Some(delta)).unwrap();
                         drop(data_w);
-                        self.revision_update_records
-                            .write()
-                            .unwrap()
-                            .push((uuid.clone(), rev, Some(w)));
+                        self.revision_update_records.write().unwrap().push((
+                            uuid.clone(),
+                            rev,
+                            Some(w),
+                        ));
                     } else {
                         // There were no delta fields or the object should not be "delta-ed"
                         let rev = Revision::new(w.index + 1, digest, Some(&w));
@@ -562,10 +579,11 @@ impl Melda {
                         drop(docs_w);
                         let mut data = self.data.write().unwrap();
                         data.write_object(&rev, obj.clone(), None).unwrap();
-                        self.revision_update_records
-                            .write()
-                            .unwrap()
-                            .push((uuid.clone(), rev, Some(w)));
+                        self.revision_update_records.write().unwrap().push((
+                            uuid.clone(),
+                            rev,
+                            Some(w),
+                        ));
                     }
                 }
             } else {
@@ -685,7 +703,11 @@ impl Melda {
                 let tuple = vec![uuid.clone(), rev.digest.clone()];
                 revision_stage.push(Value::from(tuple));
             } else {
-                let triple = vec![uuid.clone(), prev.as_ref().unwrap().to_string(), rev.digest.clone()];
+                let triple = vec![
+                    uuid.clone(),
+                    prev.as_ref().unwrap().to_string(),
+                    rev.digest.clone(),
+                ];
                 revision_stage.push(Value::from(triple));
             }
         }

@@ -14,12 +14,12 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #![feature(map_first_last)]
-pub mod melda;
 pub mod adapter;
-pub mod filesystemadapter;
-pub mod memoryadapter;
-pub mod solidadapter;
 mod datastorage;
+pub mod filesystemadapter;
+pub mod melda;
+pub mod memoryadapter;
 mod revision;
 mod revisiontree;
+pub mod solidadapter;
 mod utils;

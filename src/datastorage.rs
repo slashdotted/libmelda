@@ -45,7 +45,10 @@ enum FetchedObject {
 impl DataStorage {
     /// Constructs a new Data storage based on the provided adapter
     pub fn new(adapter: Arc<RwLock<Box<dyn Adapter>>>) -> DataStorage {
-        let cache_size = std::env::var("MELDA_DATA_CACHE_CAP").unwrap_or("16".to_string()).parse::<u32>().unwrap() as usize;
+        let cache_size = std::env::var("MELDA_DATA_CACHE_CAP")
+            .unwrap_or("16".to_string())
+            .parse::<u32>()
+            .unwrap() as usize;
         DataStorage {
             adapter,
             pack: HashMap::<String, Value>::new(),
@@ -204,8 +207,7 @@ impl DataStorage {
                     let changes = v.as_array().ok_or(anyhow!("not_an_array"))?;
                     let non_delta_corresponding_field = k.strip_prefix(DELTA_PREFIX).unwrap();
                     // Determine parent revision (revision of the reference)
-                    let delta_reference_revision =
-                        rt.parent(obj_revision);
+                    let delta_reference_revision = rt.parent(obj_revision);
                     // Obtain the reference object to apply changes to
                     let delta_reference_object = if delta_reference_revision.is_none() {
                         // This is a first revision, which cannot be a delta

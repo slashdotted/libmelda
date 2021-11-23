@@ -57,19 +57,22 @@ impl Revision {
             digest: digest.into(),
             delta_digest: None,
             tail: match parent {
-            Some(p) => {
-                let fulltail = digest_string(&p.to_string());
-                Some(fulltail[..7].to_string())
+                Some(p) => {
+                    let fulltail = digest_string(&p.to_string());
+                    Some(fulltail[..7].to_string())
+                }
+                None => None,
             },
-            None => {
-                None
-            },
-            }
         }
     }
 
     /// Constructs a new revision for a delta object
-    pub fn new_with_delta<T>(index: u32, digest: T, delta_digest: T, parent: Option<&Revision>) -> Revision
+    pub fn new_with_delta<T>(
+        index: u32,
+        digest: T,
+        delta_digest: T,
+        parent: Option<&Revision>,
+    ) -> Revision
     where
         T: Into<String>,
     {
@@ -78,14 +81,12 @@ impl Revision {
             digest: digest.into(),
             delta_digest: Some(delta_digest.into()),
             tail: match parent {
-            Some(p) => {
-                let fulltail = digest_string(&p.to_string());
-                Some(fulltail[..7].to_string())
+                Some(p) => {
+                    let fulltail = digest_string(&p.to_string());
+                    Some(fulltail[..7].to_string())
+                }
+                None => None,
             },
-            None => {
-                None
-            },
-            }
         }
     }
 

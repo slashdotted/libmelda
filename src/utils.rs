@@ -58,18 +58,27 @@ pub fn digest_bytes(content: &[u8]) -> String {
 
 /// Computes the digest of a JSON object
 pub fn digest_object(o: &Map<String, Value>) -> Result<String> {
-    if o.contains_key("_id") {
+    if o.is_empty() {
+        return Ok("empty".to_string())
+    } else if o.contains_key("_id") {
         bail!("identifier_in_object")
-    } else if o.is_empty() {
-        Ok("empty".to_string())
-    } else if o.contains_key("#") {
-        match o.get("#").unwrap().as_str() {
-            Some(v) => Ok(v.to_string()),
-            None => bail!("hash_field_not_a_string"),
+    }
+    match o.get("#") {
+        Some(v) => {
+            if v.is_string() {
+                Ok(v.to_string())
+            } else if v.is_i64() {
+                Ok(v.as_i64().unwrap().to_string())
+            } else if v.is_f64() {
+                Ok(v.as_f64().unwrap().to_string())
+            } else {
+                bail!("invalid_hash_value_type")
+            }
         }
-    } else {
-        let content = serde_json::to_string(o).unwrap();
-        Ok(digest_string(&content))
+        None => {
+            let content = serde_json::to_string(o).unwrap();
+            Ok(digest_string(&content))
+        }
     }
 }
 
