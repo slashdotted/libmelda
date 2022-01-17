@@ -25,7 +25,7 @@ use serde_json::json;
 use serde_json::Map;
 use serde_json::Value;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
 
 const DELTA_PREFIX: &str = "\u{0394}";
@@ -74,6 +74,38 @@ impl DataStorage {
         Ok(())
     }
 
+    /// Loads a pack file (and rebuilds the index)
+    fn load_pack(&mut self, name: &String) -> Result<()> {
+        let data = self
+            .adapter
+            .read()
+            .unwrap()
+            .read_object(name.as_str(), 0, 0)?;
+        self.load_pack_data(name, &data)
+    }
+
+    /// Data is the raw string (we need to compute the offset and length of the object)
+    fn load_pack_data(&mut self, name: &String, data: &Vec<u8>) -> Result<()> {
+        let mut flag = 0;
+        let mut obj_start = 0;
+        for (offset, c) in data.iter().enumerate() {
+            if *c == b'{' {
+                if flag == 0 {
+                    obj_start = offset;
+                };
+                flag += 1;
+            } else if *c == b'}' {
+                flag -= 1;
+                if flag == 0 {
+                    let digest = digest_bytes(&data[obj_start..offset + 1]);
+                    let count = offset + 1 - obj_start;
+                    self.objects.insert(digest, (name.clone(), offset, count));
+                };
+            }
+        }
+        Ok(())
+    }
+
     /// Loads an index object
     fn load_index_object(&mut self, index: &String, obj: &Map<String, Value>) -> Result<()> {
         for (k, v) in obj {
@@ -107,10 +139,16 @@ impl DataStorage {
     pub fn reload(&mut self) -> Result<()> {
         self.pack.clear();
         self.objects.clear();
-        let list_str = self.adapter.read().unwrap().list_objects(".index")?;
-        if !list_str.is_empty() {
-            for i in &list_str {
-                self.load_index(i)?;
+        let pack_list = self.adapter.read().unwrap().list_objects(".pack")?;
+        let index_list = self.adapter.read().unwrap().list_objects(".index")?;
+        let index_set = index_list.into_iter().collect::<HashSet<_>>();
+        if !pack_list.is_empty() {
+            for i in &pack_list {
+                if index_set.contains(i) {
+                    self.load_index(i)?;
+                } else {
+                    self.load_pack(i)?;
+                }
             }
         }
         Ok(())
@@ -151,8 +189,12 @@ impl DataStorage {
                 Ok(())
             } else {
                 // Otherwise store according to the full object digest
-                self.write_data(&rev.digest, obj.clone().into())?;
-                Ok(())
+                if rev.digest.len() <= 10 && rev.digest.parse::<u32>().is_ok() {
+                    Ok(())
+                } else {
+                    self.write_data(&rev.digest, obj.clone().into())?;
+                    Ok(())
+                }
             }
         }
     }
@@ -362,7 +404,11 @@ impl DataStorage {
         revision: &Revision,
         rt: &RevisionTree,
     ) -> Result<Map<String, Value>> {
-        self.read_merged_object(revision, rt)
+        if revision.digest.len() <= 10 && revision.digest.parse::<u32>().is_ok() {
+            Ok(json!({"#":revision.digest}).as_object().unwrap().clone())
+        } else {
+            self.read_merged_object(revision, rt)
+        }
     }
 
     /// Constructs a delta object by replacing delta field values with patches from the current winner
@@ -475,7 +521,7 @@ impl DataStorage {
         }
     }
 
-    /// Packs temporary data into a new pack (committing to the adapter)
+    /// Packs temporary data into a new pack with an index (committing to the adapter)
     /// Returns the identifier or the pack (digest of its contents)
     pub fn pack(&mut self) -> Result<Option<String>> {
         if self.pack.is_empty() {
@@ -500,12 +546,18 @@ impl DataStorage {
         buf.push(b']');
         let pack_digest = digest_bytes(buf.as_slice());
         let pack_key = pack_digest.clone() + ".pack";
-        let index_key = pack_digest.clone() + ".index";
         let adapter = self.adapter.write().unwrap();
         adapter.write_object(&pack_key, buf.as_slice())?;
-        let index_map_contents = serde_json::to_string(&index_map).unwrap();
-        adapter.write_object(&index_key, index_map_contents.as_bytes())?;
         drop(adapter);
+        if buf.len() > 800 * index_map.len() {
+            // 80 bytes is the estimated size of an index entry, use index only if the size is 10 times bigger
+            // Only write the index if worth it
+            let index_key = pack_digest.clone() + ".index";
+            let index_map_contents = serde_json::to_string(&index_map).unwrap();
+            let adapter = self.adapter.write().unwrap();
+            adapter.write_object(&index_key, index_map_contents.as_bytes())?;
+            drop(adapter);
+        }
         self.load_index_object(&pack_digest, &index_map)?;
         self.pack.clear();
         Ok(Some(pack_digest))

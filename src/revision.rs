@@ -92,19 +92,19 @@ impl Revision {
 
     /// Constructs a new deleted revision
     pub fn new_deleted(parent: &Revision) -> Revision {
-        Revision::new(parent.index + 1, "deleted".to_string(), Some(parent))
+        Revision::new(parent.index + 1, "d".to_string(), Some(parent))
     }
 
     /// Constructs a new empty revision
     #[allow(dead_code)]
     pub fn new_empty(parent: &Revision) -> Revision {
-        Revision::new(parent.index + 1, "empty".to_string(), Some(parent))
+        Revision::new(parent.index + 1, "e".to_string(), Some(parent))
     }
 
     /// Constructs a new resolved revision
     #[allow(dead_code)]
     pub fn new_resolved(parent: &Revision) -> Revision {
-        Revision::new(parent.index + 1, "resolved".to_string(), Some(parent))
+        Revision::new(parent.index + 1, "r".to_string(), Some(parent))
     }
 
     /// Constructs a new revision from a string
@@ -139,17 +139,17 @@ impl Revision {
 
     /// Returns true if the revision represents a deleted object
     pub fn is_deleted(&self) -> bool {
-        self.digest == r#"deleted"#
+        self.digest == r#"d"#
     }
 
     /// Returns true if the revision represents a resolved object
     pub fn is_resolved(&self) -> bool {
-        self.digest == r#"resolved"#
+        self.digest == r#"r"#
     }
 
     /// Returns true if the revision represents an empty object
     pub fn is_empty(&self) -> bool {
-        self.digest == r#"empty"#
+        self.digest == r#"e"#
     }
 
     pub fn is_delta(&self) -> bool {

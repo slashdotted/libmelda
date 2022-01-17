@@ -59,14 +59,14 @@ pub fn digest_bytes(content: &[u8]) -> String {
 /// Computes the digest of a JSON object
 pub fn digest_object(o: &Map<String, Value>) -> Result<String> {
     if o.is_empty() {
-        return Ok("empty".to_string())
+        return Ok("empty".to_string());
     } else if o.contains_key("_id") {
         bail!("identifier_in_object")
     }
     match o.get("#") {
         Some(v) => {
             if v.is_string() {
-                Ok(v.to_string())
+                Ok(v.as_str().unwrap().to_owned())
             } else if v.is_i64() {
                 Ok(v.as_i64().unwrap().to_string())
             } else if v.is_f64() {
