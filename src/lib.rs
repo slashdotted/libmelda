@@ -17,6 +17,7 @@
 pub mod adapter;
 mod datastorage;
 pub mod filesystemadapter;
+pub mod flate2filesystemadapter;
 pub mod melda;
 pub mod memoryadapter;
 mod revision;
