@@ -75,13 +75,14 @@ impl DataStorage {
     }
 
     /// Loads a pack file (and rebuilds the index)
-    fn load_pack(&mut self, name: &String) -> Result<()> {
+    fn load_pack(&mut self, pack: &String) -> Result<()> {
+        let object = pack.clone() + ".pack";
         let data = self
             .adapter
             .read()
             .unwrap()
-            .read_object(name.as_str(), 0, 0)?;
-        self.load_pack_data(name, &data)
+            .read_object(object.as_str(), 0, 0)?;
+        self.load_pack_data(pack, &data)
     }
 
     /// Data is the raw string (we need to compute the offset and length of the object)
@@ -99,7 +100,8 @@ impl DataStorage {
                 if flag == 0 {
                     let digest = digest_bytes(&data[obj_start..offset + 1]);
                     let count = offset + 1 - obj_start;
-                    self.objects.insert(digest, (name.clone(), offset, count));
+                    self.objects
+                        .insert(digest, (name.clone(), obj_start, count));
                 };
             }
         }
