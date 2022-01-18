@@ -35,6 +35,7 @@ pub struct DataStorage {
     pack: HashMap<String, Value>,
     objects: HashMap<String, (String, usize, usize)>,
     cache: Mutex<RefCell<LruCache<String, Map<String, Value>>>>,
+    force_full_array_interval: u32,
 }
 
 enum FetchedObject {
@@ -49,6 +50,10 @@ impl DataStorage {
             .unwrap_or("16".to_string())
             .parse::<u32>()
             .unwrap() as usize;
+        let full_array_interval = std::env::var("MELDA_FORCE_FULL_ARRAY_INTERVAL")
+            .unwrap_or("1000".to_string())
+            .parse::<u32>()
+            .unwrap();
         DataStorage {
             adapter,
             pack: HashMap::<String, Value>::new(),
@@ -56,6 +61,7 @@ impl DataStorage {
             cache: Mutex::new(RefCell::new(LruCache::<String, Map<String, Value>>::new(
                 cache_size,
             ))),
+            force_full_array_interval: full_array_interval,
         }
     }
 
@@ -191,7 +197,7 @@ impl DataStorage {
                 Ok(())
             } else {
                 // Otherwise store according to the full object digest
-                if rev.digest.len() <= 10 && rev.digest.parse::<u32>().is_ok() {
+                if rev.digest.len() <= 8 && u32::from_str_radix(&rev.digest, 16).is_ok() {
                     Ok(())
                 } else {
                     self.write_data(&rev.digest, obj.clone().into())?;
@@ -406,8 +412,10 @@ impl DataStorage {
         revision: &Revision,
         rt: &RevisionTree,
     ) -> Result<Map<String, Value>> {
-        if revision.digest.len() <= 10 && revision.digest.parse::<u32>().is_ok() {
-            Ok(json!({"#":revision.digest}).as_object().unwrap().clone())
+        if revision.digest.len() <= 8 && u32::from_str_radix(&revision.digest, 16).is_ok() {
+            let mut o = Map::<String, Value>::new();
+            o.insert("#".to_string(), Value::from(revision.digest.clone()));
+            Ok(o)
         } else {
             self.read_merged_object(revision, rt)
         }
@@ -427,8 +435,9 @@ impl DataStorage {
         let mut delta_reference_object: Option<Map<String, Value>> = None;
         let delta_reference_revision = rt.winner();
         if let Some(r) = delta_reference_revision {
-            if r.index % 1000 == 0 {
-                // Force a full object every 1000 revisions
+            if self.force_full_array_interval != 0 && r.index % self.force_full_array_interval == 0
+            {
+                // Force a full object every N revisions
                 return Ok(None);
             }
         }
