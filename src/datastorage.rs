@@ -43,9 +43,9 @@ enum FetchedObject {
     Full(Map<String, Value>),
 }
 
-struct ReconstructionPath {
+struct ReconstructionPath<'a> {
     origin: Map<String, Value>,
-    path: Vec<Revision>,
+    path: Vec<&'a Revision>,
 }
 
 impl DataStorage {
@@ -196,9 +196,11 @@ impl DataStorage {
                     rev.delta_digest.as_ref().unwrap(),
                     Value::from(delta_obj.clone()),
                 )?;
-                let cache_l = self.cache.lock().unwrap();
-                let mut cache = cache_l.borrow_mut();
-                cache.put(rev.digest.to_string(), obj); // Only cache the full object
+                {
+                    let cache_l = self.cache.lock().unwrap();
+                    let mut cache = cache_l.borrow_mut();
+                    cache.put(rev.digest.to_string(), obj); // Only cache the full object
+                }
                 Ok(())
             } else {
                 // Otherwise store according to the full object digest
@@ -206,20 +208,27 @@ impl DataStorage {
                     Ok(())
                 } else {
                     self.write_data(&rev.digest, obj.clone().into())?;
+                    {
+                        let cache_l = self.cache.lock().unwrap();
+                        let mut cache = cache_l.borrow_mut();
+                        cache.put(rev.digest.to_string(), obj); // Only cache the full object
+                    }
                     Ok(())
                 }
             }
         }
     }
 
-    fn build_reconstruction_path(
+    fn build_reconstruction_path<'a>(
         &self,
-        fromrev: &Revision,
-        rt: &RevisionTree,
-    ) -> Result<ReconstructionPath> {
-        let mut reconstruction_path = vec![];
+        fromrev: &'a Revision,
+        rt: &'a RevisionTree,
+    ) -> Result<ReconstructionPath<'a>> {
+        let mut reconstruction_path: Vec<&'a Revision> = vec![];
         assert!(!fromrev.is_resolved());
         let mut crev = fromrev;
+        let cache_l = self.cache.lock().unwrap();
+        let mut cache = cache_l.borrow_mut();
         loop {
             if crev.is_deleted() {
                 // Special case, deleted object
@@ -233,19 +242,13 @@ impl DataStorage {
                     origin: Map::<String, Value>::new(),
                     path: reconstruction_path,
                 });
+            } else if cache.contains(&crev.digest) {
+                return Ok(ReconstructionPath {
+                    origin: cache.get(&crev.digest).unwrap().clone(),
+                    path: reconstruction_path,
+                });
             } else if !crev.is_delta() {
                 // We reached the first revision or a non-delta revision
-                // Check if the cache contains the full object
-                {
-                    let cache_l = self.cache.lock().unwrap();
-                    let mut cache = cache_l.borrow_mut();
-                    if cache.contains(&crev.digest) {
-                        return Ok(ReconstructionPath {
-                            origin: cache.get(&crev.digest).unwrap().clone(),
-                            path: reconstruction_path,
-                        });
-                    }
-                }
                 // Otherwise read the data from the backend adapter
                 match self.read_data(&crev.digest)? {
                     Some(o) => {
@@ -261,7 +264,7 @@ impl DataStorage {
                 }
             } else {
                 // Store this delta revision in the reconstruction path
-                reconstruction_path.push(crev.clone());
+                reconstruction_path.push(crev);
                 // Retrieve the parent revision
                 crev = match rt.parent(crev) {
                     Some(r) => r,
@@ -316,7 +319,9 @@ impl DataStorage {
         {
             let cache_l = self.cache.lock().unwrap();
             let mut cache = cache_l.borrow_mut();
-            cache.put(rev.digest.to_string(), origin.clone());
+            if !cache.contains(&rev.digest) {
+                cache.put(rev.digest.to_string(), origin.clone());
+            }
         }
         Ok(origin)
     }
@@ -560,11 +565,6 @@ impl DataStorage {
             let json = std::str::from_utf8(&data)?;
             let json: Value = serde_json::from_str(json)?;
             if json.is_object() {
-                {
-                    let cache_l = self.cache.lock().unwrap();
-                    let mut cache = cache_l.borrow_mut();
-                    cache.put(digest.to_string(), json.as_object().unwrap().clone());
-                }
                 Ok(Some(json))
             } else {
                 bail!("not_an_object")
