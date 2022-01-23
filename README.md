@@ -38,6 +38,14 @@ let data = replica.read().expect("failed_to_read");
 let root_obj = data.as_object().expect("not_an_object");
 ```
 
+# Benchmarks
+
+In the benchmark directory you will find a benchmark comparing Melda to Automerge
+
+# Example integration
+
+In the kibi directory you will find an example of integration of Melda into a text-editor
+
 # License
 (c)2021 Amos Brocco,
 GPL v3

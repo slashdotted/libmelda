@@ -1,0 +1,7 @@
+{
+  "dependencies": {
+    "automerge": "^1.0.1-preview.6",
+    "crypto": "^1.0.1",
+    "uuid": "^3.4.0"
+  }
+}
