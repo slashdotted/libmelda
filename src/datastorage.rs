@@ -43,6 +43,11 @@ enum FetchedObject {
     Full(Map<String, Value>),
 }
 
+struct ReconstructionPath {
+    origin: Map<String, Value>,
+    path: Vec<Revision>,
+}
+
 impl DataStorage {
     /// Constructs a new Data storage based on the provided adapter
     pub fn new(adapter: Arc<RwLock<Box<dyn Adapter>>>) -> DataStorage {
@@ -207,6 +212,65 @@ impl DataStorage {
         }
     }
 
+    fn build_reconstruction_path(
+        &self,
+        fromrev: &Revision,
+        rt: &RevisionTree,
+    ) -> Result<ReconstructionPath> {
+        let mut reconstruction_path = vec![];
+        assert!(!fromrev.is_resolved());
+        let mut crev = fromrev;
+        loop {
+            if crev.is_deleted() {
+                // Special case, deleted object
+                return Ok(ReconstructionPath {
+                    origin: json!({"_deleted":true}).as_object().unwrap().clone(),
+                    path: reconstruction_path,
+                });
+            } else if crev.is_empty() {
+                // Special case, empty object
+                return Ok(ReconstructionPath {
+                    origin: Map::<String, Value>::new(),
+                    path: reconstruction_path,
+                });
+            } else if !crev.is_delta() {
+                // We reached the first revision or a non-delta revision
+                // Check if the cache contains the full object
+                {
+                    let cache_l = self.cache.lock().unwrap();
+                    let mut cache = cache_l.borrow_mut();
+                    if cache.contains(&crev.digest) {
+                        return Ok(ReconstructionPath {
+                            origin: cache.get(&crev.digest).unwrap().clone(),
+                            path: reconstruction_path,
+                        });
+                    }
+                }
+                // Otherwise read the data from the backend adapter
+                match self.read_data(&crev.digest)? {
+                    Some(o) => {
+                        let obj = o.as_object().ok_or(anyhow!("not_an_object"))?;
+                        return Ok(ReconstructionPath {
+                            origin: obj.clone(),
+                            path: reconstruction_path,
+                        });
+                    }
+                    None => {
+                        return Err(anyhow!("failed_to_read_object {}", crev.to_string()));
+                    }
+                }
+            } else {
+                // Store this delta revision in the reconstruction path
+                reconstruction_path.push(crev.clone());
+                // Retrieve the parent revision
+                crev = match rt.parent(crev) {
+                    Some(r) => r,
+                    None => return Err(anyhow!("failed_to_determine_parent {}", crev.to_string())),
+                };
+            }
+        }
+    }
+
     /// Returns the object at the given revision (the resulting object is not undelta nor merged)
     fn read_object_or_delta(&self, rev: &Revision) -> Result<FetchedObject> {
         assert!(!rev.is_resolved());
@@ -242,85 +306,65 @@ impl DataStorage {
         }
     }
 
-    /// Resolves all delta fields and returns the processed object
-    /// The reference revision is the revision associated with the object
-    /// The revision tree is used to recursively resolve other deltas
-    fn read_undelta_object(
-        &self,
-        obj: Map<String, Value>,
-        obj_revision: &Revision,
-        rt: &RevisionTree,
-    ) -> Result<Map<String, Value>> {
-        obj.into_iter()
-            .map(|(k, v)| {
-                if k.starts_with(DELTA_PREFIX) {
-                    let changes = v.as_array().ok_or(anyhow!("not_an_array"))?;
-                    let non_delta_corresponding_field = k.strip_prefix(DELTA_PREFIX).unwrap();
-                    // Determine parent revision (revision of the reference)
-                    let delta_reference_revision = rt.parent(obj_revision);
-                    // Obtain the reference object to apply changes to
-                    let delta_reference_object = if delta_reference_revision.is_none() {
-                        // This is a first revision, which cannot be a delta
-                        return Ok((k, Value::from(changes.clone())));
-                    } else {
-                        // Otherwise fetch reference object
-                        self.read_full_object(delta_reference_revision.unwrap(), rt)
-                    }?;
-                    // Get the reference field (either as delta or non delta)
-                    let base_array = if delta_reference_object.contains_key(&k) {
-                        delta_reference_object
-                            .get(&k)
-                            .unwrap()
-                            .as_array()
-                            .ok_or(anyhow!("not_an_array"))?
-                    } else if delta_reference_object.contains_key(non_delta_corresponding_field) {
-                        delta_reference_object
-                            .get(non_delta_corresponding_field)
-                            .unwrap()
-                            .as_array()
-                            .ok_or(anyhow!("not_an_array"))?
-                    } else {
-                        bail!("missing_referenced_field")
-                    };
-                    // Apply patch
-                    let mut base_array = base_array.clone();
-                    apply_diff_patch(&mut base_array, &changes)?;
-                    Ok((k, Value::from(base_array).clone()))
-                } else {
-                    Ok((k, v))
-                }
-            })
-            .collect()
-    }
-
     /// Reads and returns an object, resolving deltas if necessary
     fn read_full_object(&self, rev: &Revision, rt: &RevisionTree) -> Result<Map<String, Value>> {
-        // Check if the cache contains the full object
+        let rb = self.build_reconstruction_path(rev, rt)?;
+        let mut origin = rb.origin;
+        for r in rb.path.into_iter().rev() {
+            origin = self.apply_delta(&r, &origin)?
+        }
         {
             let cache_l = self.cache.lock().unwrap();
             let mut cache = cache_l.borrow_mut();
-            if cache.contains(&rev.digest) {
-                return Ok(cache.get(&rev.digest).unwrap().clone());
-            }
+            cache.put(rev.digest.to_string(), origin.clone());
         }
-        match self.read_object_or_delta(rev) {
-            Ok(obj) => match obj {
-                FetchedObject::Delta(dobj) => {
-                    let fobj = self.read_undelta_object(dobj, rev, rt)?;
-                    {
-                        let cache_l = self.cache.lock().unwrap();
-                        let mut cache = cache_l.borrow_mut();
-                        cache.put(rev.digest.to_string(), fobj.clone());
-                    }
-                    Ok(fobj)
-                }
-                FetchedObject::Full(fobj) => Ok(fobj),
-            },
-            Err(e) => Err(anyhow!(
-                "failed_to_read_full_object {} {:?}",
-                rev.to_string(),
-                e
-            )),
+        Ok(origin)
+    }
+
+    // Applies a delta revision object to a reference object
+    fn apply_delta(
+        &self,
+        delta_revision: &Revision,
+        delta_reference_object: &Map<String, Value>,
+    ) -> Result<Map<String, Value>> {
+        let obj = self.read_object_or_delta(delta_revision)?;
+        match obj {
+            FetchedObject::Delta(obj) => {
+                obj.into_iter()
+                    .map(|(k, v)| {
+                        if k.starts_with(DELTA_PREFIX) {
+                            let changes = v.as_array().ok_or(anyhow!("not_an_array"))?;
+                            let non_delta_corresponding_field =
+                                k.strip_prefix(DELTA_PREFIX).unwrap();
+                            // Get the reference field (either as delta or non delta)
+                            let base_array = if delta_reference_object.contains_key(&k) {
+                                delta_reference_object
+                                    .get(&k)
+                                    .unwrap()
+                                    .as_array()
+                                    .ok_or(anyhow!("not_an_array"))?
+                            } else if delta_reference_object
+                                .contains_key(non_delta_corresponding_field)
+                            {
+                                delta_reference_object
+                                    .get(non_delta_corresponding_field)
+                                    .unwrap()
+                                    .as_array()
+                                    .ok_or(anyhow!("not_an_array"))?
+                            } else {
+                                bail!("missing_referenced_field")
+                            };
+                            // Apply patch
+                            let mut base_array = base_array.clone();
+                            apply_diff_patch(&mut base_array, &changes)?;
+                            Ok((k, Value::from(base_array).clone()))
+                        } else {
+                            Ok((k, v))
+                        }
+                    })
+                    .collect()
+            }
+            FetchedObject::Full(obj) => Ok(obj),
         }
     }
 
