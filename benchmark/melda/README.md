@@ -10,6 +10,6 @@ cargo build --release
 
 # EXECUTE
 ```bash
-./target/release/melda-bench build interval-100 100
-./target/release/melda-bench read interval-100
+./target/release/melda-bench buildflate interval-100 100
+./target/release/melda-bench readflate interval-100
 ```
