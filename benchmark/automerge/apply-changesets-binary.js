@@ -8,7 +8,7 @@ const fs = require('fs');
 const Automerge = require('automerge')
 var args = process.argv.slice(2);
 // The batch size (interval) is given as command line parameter
-var dir = "./automerge-binary-"+args[0
+var dir = "./automerge-binary-"+args[0]
 
 // Initialize the state
 let doc = Automerge.init()
