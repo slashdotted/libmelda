@@ -57,7 +57,7 @@ for (let i = 0; i < edits.length;) {
   state = newstate
   const batchStateRefUpdate = new Date()
   totalTime = new Date() - start
-  var eps = (totalTime / 1000.0) / i
+  var eps = i / (totalTime / 1000.0) 
   const rss = process.memoryUsage().rss
   console.log(`${i},edits,${totalTime},total_ms,${eps},eps,${batchChangeEnd-batchChangeStart},change_ms,${batchGetChangesEnd-batchChangeEnd},getChanges_ms,${batchCommitEnd-batchGetChangesEnd},writeFileSync_ms,${batchStateRefUpdate-batchCommitEnd},stateRefUpdate_ms,${rss},rss`)
 }
