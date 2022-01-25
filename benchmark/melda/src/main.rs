@@ -106,6 +106,12 @@ fn main() {
         let mut replica =
             Melda::new(Arc::new(RwLock::new(file_adapter))).expect("cannot_initialize_crdt");
         let mut input = vec![];
+        let statm = procinfo::pid::statm_self().unwrap();
+        println!(
+            "Initial memory {} vm, {} resident",
+            statm.size * page_size,
+            statm.resident * page_size
+        );
         if let Ok(lines) = read_lines("./editing-trace.txt") {
             for line in lines {
                 if let Ok(content) = line {
@@ -114,6 +120,12 @@ fn main() {
                 }
             }
         }
+        let statm = procinfo::pid::statm_self().unwrap();
+        println!(
+            "After load memory {} vm, {} resident",
+            statm.size * page_size,
+            statm.resident * page_size
+        );
         let start = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
         // Initialize the "empty" document
         let mut base_doc = json!({ CHAR_KEY: Value::from(Vec::<Value>::new()) })

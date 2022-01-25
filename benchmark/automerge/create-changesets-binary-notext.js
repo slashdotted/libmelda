@@ -38,7 +38,7 @@ for (let i = 0; i < edits.length;) {
   newstate = Automerge.change(state, doc => {
 	for (let j=0; i <edits.length && j < interval; i++, j++) {
 		if (edits[i][1] > 0) doc.text.deleteAt(edits[i][0], edits[i][1])
-		if (edits[i].length > 2) {
+		else if (edits[i].length > 2) {
 			let t = edits[i][2]
 			let thechar = { "_id" : randomUUID(), "#" :  t.charCodeAt(0).toString(16) }
 			doc.text.insertAt(edits[i][0], thechar)
