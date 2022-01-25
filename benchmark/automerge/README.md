@@ -1,6 +1,6 @@
 # Installation
 ```bash
-npm install automerge
+npm install automerge crypto
 ```
 
 # Creating the changeset
