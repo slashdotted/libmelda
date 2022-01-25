@@ -40,7 +40,7 @@ fs.readdir(dir, (err, files) => {
   console.error(txt)
   console.log(`Read time ${new Date() - readstart} ms`)
   if (txt !== finalText) {
-      throw new RangeError('ERROR: final text did not match expectation' 
+      throw new RangeError('ERROR: final text did not match expectation')
   }  
 });
 
