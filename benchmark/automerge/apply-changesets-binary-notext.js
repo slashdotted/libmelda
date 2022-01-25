@@ -3,7 +3,7 @@
  * This version does not use Automerge.Text
  * 
  * */
-
+const { finalText } = require('./editing-trace')
 const fs = require('fs');
 const Automerge = require('automerge')
 var args = process.argv.slice(2);
@@ -20,14 +20,16 @@ const start = new Date()
 fs.readdir(dir, (err, files) => {
   // For each changeset, apply the changes
   files.forEach(file => {
-      console.log(`Applying changeset ${file}`)
+      const startReadFile = new Date()
 	  const changes = fs.readFileSync(dir+"/"+file, null );
+	  const startApplyChanges = new Date()
 	  let [newdoc, patch] = Automerge.applyChanges(doc, [changes])
+	  const endApplyChanges = new Date()
       doc = newdoc
+      const endUpdateDocRef = new Date()
+      const rss = process.memoryUsage().rss
+      console.log(`${file},filename,${new Date() - start},total_ms,${startApplyChanges-startReadFile},readFileSync_ms,${endApplyChanges-startApplyChanges},applyChanges_ms,${endUpdateDocRef-endApplyChanges},stateRefUpdate_ms,${rss},rss_bytes`)
   });
-  console.log(`Changeset load time ${new Date() - start} ms`)
-  const used = process.memoryUsage().heapUsed / 1024 / 1024;
-  console.log(`Current memory usage ${Math.round(used * 100) / 100} MB`);
   const readstart = new Date()
   // Convert the object array into text
   var arr = []
@@ -37,6 +39,9 @@ fs.readdir(dir, (err, files) => {
   var txt = String.fromCharCode(...arr)
   console.error(txt)
   console.log(`Read time ${new Date() - readstart} ms`)
+  if (txt !== finalText) {
+      throw new RangeError('ERROR: final text did not match expectation' 
+  }  
 });
 
 
