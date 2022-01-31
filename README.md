@@ -26,12 +26,19 @@ To update the data structure call the *update* procedure:
 let mut base_doc = json!({ }).as_object().unwrap().clone();
 replica.update(base_doc.clone()).expect("failed_to_update");
 ```
-You can perform as many updates as you want. Finally, you need to commit those changes:
+You can perform as many updates as you want.
+
+```rust
+let mut newer_version = json!({ "somekey" : [ "somedata", 1, 2, 3, 4 ] }).as_object().unwrap().clone();
+replica.update(newer_version.clone()).expect("failed_to_update");
+```
+
+Finally, you need to commit those changes:
 
 ```rust
 replica.commit(None, false).expect("failed_to_commit");
 ```
-
+Upon commit a delta state will be written on the backend adapter (in this example, a *delta* and a *pack* file will be written to disk).
 To read the data structure back into a JSON document use the *read* procedure:
 ```rust
 let data = replica.read().expect("failed_to_read");
