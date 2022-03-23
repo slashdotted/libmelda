@@ -51,7 +51,10 @@ impl RevisionTree {
     pub fn leafs(&self) -> BTreeSet<&Revision> {
         let mut leafs = self.all_revs();
         self.revisions.iter().for_each(|(rev, parent)| {
-            if !rev.is_resolved() && !parent.is_none() {
+            if rev.is_resolved() {
+                leafs.remove(rev);
+            }
+            if !parent.is_none() {
                 leafs.remove(&parent.as_ref().unwrap());
             }
         });
@@ -146,7 +149,7 @@ mod tests {
             crate::revision::Revision::from("2-abc_cde").ok(),
         );
         rt.add(
-            crate::revision::Revision::from("4-resolved_cde").unwrap(),
+            crate::revision::Revision::from("4-r_cde").unwrap(),
             crate::revision::Revision::from("3-aaa_cde").ok(),
         );
         rt.add(crate::revision::Revision::from("1-abc").unwrap(), None);
@@ -156,5 +159,45 @@ mod tests {
         );
         let w = rt.winner().unwrap();
         assert!(w.to_string() == "3-xyz_cde");
+    }
+
+    #[test]
+    fn test_leafs() {
+        let mut rt = super::RevisionTree::new();
+        rt.add(
+            crate::revision::Revision::from("3-abc_cde").unwrap(),
+            crate::revision::Revision::from("2-abc_cde").ok(),
+        );
+        rt.add(
+            crate::revision::Revision::from("3-xyz_cde").unwrap(),
+            crate::revision::Revision::from("2-abc_cde").ok(),
+        );
+        rt.add(
+            crate::revision::Revision::from("3-aaa_cde").unwrap(),
+            crate::revision::Revision::from("2-abc_cde").ok(),
+        );
+        rt.add(
+            crate::revision::Revision::from("4-r_cde").unwrap(),
+            crate::revision::Revision::from("3-aaa_cde").ok(),
+        );
+        rt.add(
+            crate::revision::Revision::from("4-xyz_cde").unwrap(),
+            crate::revision::Revision::from("3-xyz_cde").ok(),
+        );
+        rt.add(crate::revision::Revision::from("1-abc").unwrap(), None);
+        rt.add(
+            crate::revision::Revision::from("2-abc_cde").unwrap(),
+            crate::revision::Revision::from("1-abc").ok(),
+        );
+        let l = rt.leafs();
+        assert!(l.len() == 2);
+        assert!(l.contains(&crate::revision::Revision::from("3-abc_cde").unwrap()));
+        assert!(l.contains(&crate::revision::Revision::from("4-xyz_cde").unwrap()));
+        // Verify order
+        let lvec : Vec<&super::Revision> = l.into_iter().collect();
+        assert!(*lvec[0] == crate::revision::Revision::from("3-abc_cde").unwrap());
+        assert!(*lvec[1] == crate::revision::Revision::from("4-xyz_cde").unwrap());
+        let w = rt.winner().unwrap();
+        assert!(lvec[1] == w);
     }
 }

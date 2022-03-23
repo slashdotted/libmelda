@@ -467,26 +467,44 @@ mod tests {
             merge_arrays(&b, &mut a);
             assert!(vec_equals(&a, &b));
         }
+        {
+            let mut a = string_value_vec!["A", "B", "Y", "D", "E"];
+            let mut b = string_value_vec!["A", "B", "X", "D", "E"];
+            merge_arrays(&a, &mut b);
+            merge_arrays(&b, &mut a);
+            assert!(vec_equals(&a, &b));
+        }
     }
 
     #[test]
     fn test_flatten() {
-        let mut c = HashMap::<String, Map<String, Value>>::new();
-        let v = json!({"_id" : "root", "data" : [{"_id": "foo", "value": 3.14}, {"_id": "bar"}]});
-        let path = vec![];
-        let f = flatten(&mut c, &v, &path);
-        assert!(f.is_string());
-        assert!(f.as_str().unwrap() == "root");
-        assert!(c.len() == 3);
-        assert!(c.contains_key("root"));
-        assert!(c.contains_key("foo"));
-        assert!(c.contains_key("bar"));
-        let content = serde_json::to_string(&c.get("root")).unwrap();
-        assert!(content == r#"{"data":["foo","bar"]}"#);
-        let content = serde_json::to_string(&c.get("foo")).unwrap();
-        assert!(content == r#"{"value":3.14}"#);
-        let content = serde_json::to_string(&c.get("bar")).unwrap();
-        assert!(content == r#"{}"#);
+        {
+            let mut c = HashMap::<String, Map<String, Value>>::new();
+            let v = json!({"_id" : "root", "data" : [{"_id": "foo", "value": 3.14}, {"_id": "bar"}]});
+            let path = vec![];
+            let f = flatten(&mut c, &v, &path);
+            assert!(f.is_string());
+            assert!(f.as_str().unwrap() == "root");
+            assert!(c.len() == 1);
+        }
+        {
+            let mut c = HashMap::<String, Map<String, Value>>::new();
+            let v = json!({"_id" : "root", "data\u{266D}" : [{"_id": "foo", "value": 3.14}, {"_id": "bar"}]});
+            let path = vec![];
+            let f = flatten(&mut c, &v, &path);
+            assert!(f.is_string());
+            assert!(f.as_str().unwrap() == "root");
+            assert!(c.len() == 3);
+            assert!(c.contains_key("root"));
+            assert!(c.contains_key("foo"));
+            assert!(c.contains_key("bar"));
+            let content = serde_json::to_string(&c.get("root")).unwrap();
+            assert!(content == r#"{"data♭":["foo","bar"]}"#);
+            let content = serde_json::to_string(&c.get("foo")).unwrap();
+            assert!(content == r#"{"value":3.14}"#);
+            let content = serde_json::to_string(&c.get("bar")).unwrap();
+            assert!(content == r#"{}"#);
+        }
     }
 
     #[test]

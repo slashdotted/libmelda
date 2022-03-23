@@ -104,7 +104,7 @@ impl Revision {
     /// Constructs a new resolved revision
     #[allow(dead_code)]
     pub fn new_resolved(parent: &Revision) -> Revision {
-        Revision::new(parent.index + 1, "r".to_string(), Some(parent))
+        Revision::new(parent.index + 1, r#"r"#.to_string(), Some(parent))
     }
 
     /// Constructs a new revision from a string
@@ -200,7 +200,13 @@ impl PartialEq for Revision {
 /// Partial Ordering
 impl PartialOrd for Revision {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        if self.index < other.index {
+        if self.is_resolved() && other.is_resolved() {
+            Some(self.to_string().cmp(&other.to_string()))
+        } else if self.is_resolved() { // Resolved revisions always have the least priority
+            Some(std::cmp::Ordering::Less)
+        } else if other.is_resolved() {
+            Some(std::cmp::Ordering::Greater)
+        } else if self.index < other.index {
             Some(std::cmp::Ordering::Less)
         } else if self.index > other.index {
             Some(std::cmp::Ordering::Greater)
@@ -218,15 +224,7 @@ impl Eq for Revision {
 /// Full Ordering
 impl Ord for Revision {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        if self.is_resolved() {
-            std::cmp::Ordering::Less
-        } else if self.index < other.index {
-            std::cmp::Ordering::Less
-        } else if self.index > other.index {
-            std::cmp::Ordering::Greater
-        } else {
-            self.to_string().cmp(&other.to_string())
-        }
+        self.partial_cmp(other).unwrap()
     }
 }
 

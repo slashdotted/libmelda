@@ -385,14 +385,20 @@ impl DataStorage {
         // The base object corresponds to the revision we want to keep
         let base_object = self.read_full_object(base_revision, rt)?;
         if leafs.len() > 1 {
-            // If there are multiple leafs, merge
+            // If there are multiple leafs, merge (leafs are merged in the same order on each
+            // replica, as leafs() is a BTreeSet, an ordered data structure)
+            // therefore, if items are moved the order will remain the same on each replica
+            // The base order is given by the winner (longest branch wins)
             let merged_object = base_object
                 .into_iter()
                 .map(|(k, v)| -> Result<(String, Value)> {
                     // Iterate over all fields and if the field is a flatten field, try to merge the contents
                     if is_flattened_field(k.as_str()) {
                         let mut base_array = v.as_array().unwrap().clone();
-                        for leaf_revision in &leafs {
+                        // Important: the ordering is given by taking conflicting revisions in the
+                        // reverse order.
+                        for leaf_revision in leafs.iter().rev() {
+                            // This is true for the first leaf
                             if **leaf_revision != *base_revision {
                                 let leaf_object = self.read_full_object(leaf_revision, rt)?;
                                 // Look for the corresponding field in the leaf object (only matching fields will be merged)
