@@ -15,11 +15,11 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Map, Value};
-use similar::{capture_diff_slices, Algorithm};
+use yavomrs::yavom::{Move, Point, myers_unfilled};
 use std::collections::HashMap;
 
-const STRING_ESCAPE_PREFIX: &str = "!";
-const FLATTEN_SUFFIX: &str = "\u{266D}";
+use crate::constants::{FLATTEN_SUFFIX, STRING_ESCAPE_PREFIX, EMPTY_HASH, ID_FIELD, HASH_FIELD, ROOT_ID, PATCH_INSERT, PATCH_DELETE};
+
 
 /// Returns true if the key matches a flattened field
 pub fn is_flattened_field(key: &str) -> bool {
@@ -59,11 +59,11 @@ pub fn digest_bytes(content: &[u8]) -> String {
 /// Computes the digest of a JSON object
 pub fn digest_object(o: &Map<String, Value>) -> Result<String> {
     if o.is_empty() {
-        return Ok("empty".to_string());
-    } else if o.contains_key("_id") {
+        return Ok(EMPTY_HASH.to_string());
+    } else if o.contains_key(ID_FIELD) {
         bail!("identifier_in_object")
     }
-    match o.get("#") {
+    match o.get(HASH_FIELD) {
         Some(v) => {
             if v.is_string() {
                 Ok(v.as_str().unwrap().to_owned())
@@ -84,14 +84,14 @@ pub fn digest_object(o: &Map<String, Value>) -> Result<String> {
 
 /// Returns the identifier of an object with path
 pub fn get_identifier(value: &Map<String, Value>, path: &Vec<String>) -> String {
-    if value.contains_key("_id") {
-        let v = value.get("_id").unwrap();
+    if value.contains_key(ID_FIELD) {
+        let v = value.get(ID_FIELD).unwrap();
         if v.is_string() {
             return v.as_str().unwrap().to_owned();
         }
     }
     if path.is_empty() {
-        "root".to_string()
+        ROOT_ID.to_string()
     } else {
         digest_string(&path.join(""))
     }
@@ -157,7 +157,7 @@ pub fn flatten(
             fpath.push(uuid.clone());
             let no: Map<String, Value> = o
                 .into_iter()
-                .filter(|(k, _)| *k != "_id")
+                .filter(|(k, _)| *k != ID_FIELD)
                 .map(|(k, v)| {
                     if k.ends_with(FLATTEN_SUFFIX) {
                         let mut fpath = fpath.clone();
@@ -212,49 +212,25 @@ pub fn unflatten(c: &HashMap<String, Map<String, Value>>, value: &Value) -> Opti
 
 /// Creates an array diff patch
 pub fn make_diff_patch(old: &Vec<Value>, new: &Vec<Value>) -> Result<Vec<Value>> {
-    let olds: Vec<String> = old
-        .into_iter()
-        .map(|v| serde_json::to_string(v).unwrap())
-        .collect();
-    let news: Vec<String> = new
-        .iter()
-        .map(|v| serde_json::to_string(v).unwrap())
-        .collect();
-    let ops = capture_diff_slices(Algorithm::Myers, &olds, &news);
+    let ops = myers_unfilled(&old, &new);
     let mut patch = vec![];
     for o in ops {
-        match o {
-            similar::DiffOp::Delete {
-                old_index: _,
-                old_len,
-                new_index,
-            } => {
-                patch.push(json!(["d", old_len, new_index]));
-            }
-            similar::DiffOp::Insert {
-                old_index: _,
-                new_index,
-                new_len,
-            } => {
-                let insertion = &new[new_index..new_index + new_len];
-                assert!(insertion.len() == new_len);
-                patch.push(json!(["i", new_index, Vec::from(insertion)]));
-            }
-            similar::DiffOp::Replace {
-                old_index: _,
-                old_len,
-                new_index,
-                new_len,
-            } => {
-                let insertion = &new[new_index..new_index + new_len];
-                assert!(insertion.len() == new_len);
-                patch.push(json!(["d", old_len, new_index]));
-                patch.push(json!(["i", new_index, Vec::from(insertion)]));
-                // FIXME: For compatibility encode replace with delete and insert
-                // We could replace the two above lines with
-                // patch.push(json!(["r", new_index, old_len, Vec::from(insertion)]));
-            }
-            _ => {}
+        let Move(op,s,t,_) = o;
+        match op {
+            yavomrs::yavom::OP::INSERT => {
+                let count = t.1 - s.1;
+                let from = s.1 as usize;
+                let to = (s.1 + count) as usize;
+                patch.push(json!([PATCH_INSERT, s.1, &new[from..to]]));
+            },
+            yavomrs::yavom::OP::DELETE => {
+                let count = t.0 - s.0;
+                patch.push(json!([PATCH_DELETE, count, s.1])); 
+            },
+            yavomrs::yavom::OP::_DELETE => {
+                let Point(count, start) = s;
+                patch.push(json!([PATCH_DELETE, count, start])); 
+            },
         }
     }
     Ok(patch)
@@ -266,7 +242,7 @@ pub fn apply_diff_patch(old: &mut Vec<Value>, patch: &Vec<Value>) -> Result<()> 
         let operation = op[0]
             .as_str()
             .ok_or(anyhow!("invalid_patch_op_not_a_string: {:?}", patch))?;
-        if operation == "d" {
+        if operation == PATCH_DELETE {
             let length = op[1]
                 .as_u64()
                 .ok_or(anyhow!("invalid_patch_length_not_a_number"))?
@@ -276,7 +252,7 @@ pub fn apply_diff_patch(old: &mut Vec<Value>, patch: &Vec<Value>) -> Result<()> 
                 .ok_or(anyhow!("invalid_patch_index_not_a_number"))?
                 as usize;
             old.drain(index..index + length);
-        } else if operation == "i" {
+        } else if operation == PATCH_INSERT {
             let index = op[1]
                 .as_u64()
                 .ok_or(anyhow!("invalid_patch_index_not_a_number"))?
@@ -286,21 +262,8 @@ pub fn apply_diff_patch(old: &mut Vec<Value>, patch: &Vec<Value>) -> Result<()> 
                 .ok_or(anyhow!("invalid_patch_items_not_an_array"))?
                 .clone();
             old.splice(index..index, items.into_iter());
-        } else if operation == "r" {
-            let index = op[1]
-                .as_u64()
-                .ok_or(anyhow!("invalid_patch_index_not_a_number"))?
-                as usize;
-            let length = op[2]
-                .as_u64()
-                .ok_or(anyhow!("invalid_patch_length_not_a_number"))?
-                as usize;
-            let items = op[3]
-                .as_array()
-                .ok_or(anyhow!("invalid_patch_items_not_an_array"))?
-                .clone();
-            old.drain(index..index + length);
-            old.splice(index..index, items.into_iter());
+        } else {
+            return Err(anyhow!("invalid_patch_op"))
         }
     }
     Ok(())
@@ -366,7 +329,7 @@ mod tests {
             digest_object(json!({"alpha": 1234}).as_object().unwrap()).unwrap()
                 == "54564897e73b8babc49d21c5c062987c1edd5bda9bba99ae3e4c810d0cb3afc0"
         );
-        assert!(digest_object(json!({}).as_object().unwrap()).unwrap() == "empty");
+        assert!(digest_object(json!({}).as_object().unwrap()).unwrap() == EMPTY_HASH);
     }
 
     #[test]
@@ -480,25 +443,25 @@ mod tests {
     fn test_flatten() {
         {
             let mut c = HashMap::<String, Map<String, Value>>::new();
-            let v = json!({"_id" : "root", "data" : [{"_id": "foo", "value": 3.14}, {"_id": "bar"}]});
+            let v = json!({ID_FIELD: ROOT_ID, "data" : [{ID_FIELD: "foo", "value": 3.14}, {ID_FIELD: "bar"}]});
             let path = vec![];
             let f = flatten(&mut c, &v, &path);
             assert!(f.is_string());
-            assert!(f.as_str().unwrap() == "root");
+            assert!(f.as_str().unwrap() == ROOT_ID);
             assert!(c.len() == 1);
         }
         {
             let mut c = HashMap::<String, Map<String, Value>>::new();
-            let v = json!({"_id" : "root", "data\u{266D}" : [{"_id": "foo", "value": 3.14}, {"_id": "bar"}]});
+            let v = json!({ID_FIELD : ROOT_ID, "data\u{266D}" : [{ID_FIELD: "foo", "value": 3.14}, {ID_FIELD: "bar"}]});
             let path = vec![];
             let f = flatten(&mut c, &v, &path);
             assert!(f.is_string());
-            assert!(f.as_str().unwrap() == "root");
+            assert!(f.as_str().unwrap() == ROOT_ID);
             assert!(c.len() == 3);
-            assert!(c.contains_key("root"));
+            assert!(c.contains_key(ROOT_ID));
             assert!(c.contains_key("foo"));
             assert!(c.contains_key("bar"));
-            let content = serde_json::to_string(&c.get("root")).unwrap();
+            let content = serde_json::to_string(&c.get(ROOT_ID)).unwrap();
             assert!(content == r#"{"data♭":["foo","bar"]}"#);
             let content = serde_json::to_string(&c.get("foo")).unwrap();
             assert!(content == r#"{"value":3.14}"#);

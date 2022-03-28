@@ -15,12 +15,14 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #![feature(map_first_last)]
 pub mod adapter;
-mod datastorage;
 pub mod filesystemadapter;
 pub mod flate2filesystemadapter;
 pub mod melda;
 pub mod memoryadapter;
+pub mod solidadapter;
+mod constants;
+mod datastorage;
 mod revision;
 mod revisiontree;
-pub mod solidadapter;
 mod utils;
+

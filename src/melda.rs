@@ -18,6 +18,7 @@ use crate::datastorage::DataStorage;
 use crate::revision::Revision;
 use crate::revisiontree::RevisionTree;
 use crate::utils::{digest_bytes, digest_object, digest_string, flatten, unflatten};
+use crate::constants::{ID_FIELD, ROOT_ID, ROOT_FIELD, CHANGESETS_FIELD, DELTA_EXTENSION, INFORMATION_FIELD, FULL_CHANGESETS_FIELD, PACK_FIELD, OBJECTS_FIELD};
 use anyhow::{anyhow, bail, Result};
 use rayon::prelude::*;
 use serde_json::{Map, Value};
@@ -38,7 +39,7 @@ impl Melda {
         let mut dc = Melda {
             documents: RwLock::new(HashMap::<String, RevisionTree>::new()),
             data: RwLock::new(DataStorage::new(adapter.clone())),
-            root_identifier: RwLock::new("root".to_string()),
+            root_identifier: RwLock::new(ROOT_ID.to_string()),
             revision_update_records: RwLock::new(Vec::<(String, Revision, Option<Revision>)>::new()),
         };
         dc.reload()?;
@@ -181,7 +182,7 @@ impl Melda {
                 path.insert(0, uuid.clone());
                 changes.push(Value::from(path));
             }
-            block.insert("C".to_string(), Value::from(changes));
+            block.insert(FULL_CHANGESETS_FIELD.to_string(), Value::from(changes));
         } else {
             // Partial (delta) record
             let mut changes = Vec::<Value>::new();
@@ -210,19 +211,19 @@ impl Melda {
                     }
                 }
             }
-            block.insert("c".to_string(), Value::from(changes));
+            block.insert(CHANGESETS_FIELD.to_string(), Value::from(changes));
         }
         if information.is_some() {
-            block.insert("i".to_string(), Value::from(information.unwrap()));
+            block.insert(INFORMATION_FIELD.to_string(), Value::from(information.unwrap()));
         }
-        if self.root_identifier.read().unwrap().ne("root") {
+        if self.root_identifier.read().unwrap().ne(ROOT_ID) {
             block.insert(
-                "r".to_string(),
+                ROOT_FIELD.to_string(),
                 Value::from(self.root_identifier.read().unwrap().clone()),
             );
         }
         let blockstr = serde_json::to_string(&block).unwrap();
-        let blockid = digest_string(&blockstr) + ".delta";
+        let blockid = digest_string(&blockstr) + DELTA_EXTENSION;
         data.write_raw_object(&blockid, blockstr.as_bytes())?;
         self.revision_update_records.write().unwrap().clear();
         log::debug!("commit {}", blockid);
@@ -231,7 +232,7 @@ impl Melda {
 
     /// Loads a block
     fn load_block(&mut self, blockid: &String) -> Result<()> {
-        let object = blockid.clone() + ".delta";
+        let object = blockid.clone() + DELTA_EXTENSION;
         let data = self.data.read().unwrap();
         let data = data.read_raw_object(object.as_str(), 0, 0)?;
         let json = std::str::from_utf8(&data)?;
@@ -240,9 +241,9 @@ impl Melda {
             let blockobj = json.as_object().unwrap();
             let digest = digest_bytes(data.as_slice());
             if digest.eq(blockid) {
-                if blockobj.contains_key("C") || blockobj.contains_key("c") {
-                    if blockobj.contains_key("k") {
-                        let packs = blockobj.get("k").ok_or(anyhow!("missing_pack_reference"))?;
+                if blockobj.contains_key(FULL_CHANGESETS_FIELD) || blockobj.contains_key(CHANGESETS_FIELD) {
+                    if blockobj.contains_key(PACK_FIELD) {
+                        let packs = blockobj.get(PACK_FIELD).ok_or(anyhow!("missing_pack_reference"))?;
                         if packs.is_array() {
                             let packs = packs.as_array().ok_or(anyhow!("packs_not_an_array"))?;
                             if !packs.iter().all(|x| {
@@ -260,15 +261,15 @@ impl Melda {
                             }
                         }
                     }
-                    if blockobj.contains_key("r") {
-                        let rootid = blockobj.get("r").ok_or(anyhow!("missing_root_id"))?;
+                    if blockobj.contains_key(ROOT_FIELD) {
+                        let rootid = blockobj.get(ROOT_FIELD).ok_or(anyhow!("missing_root_id"))?;
                         if !rootid.is_string() {
                             bail!("root_is_not_string");
                         }
                         let mut rid = self.root_identifier.write().unwrap();
                         *rid = rootid.as_str().unwrap().to_string();
                     }
-                    let changes = blockobj.get("C");
+                    let changes = blockobj.get(FULL_CHANGESETS_FIELD);
                     if changes.is_some() && changes.unwrap().is_array() {
                         for c in changes.unwrap().as_array().unwrap() {
                             if c.is_array() {
@@ -303,7 +304,7 @@ impl Melda {
                             }
                         }
                     }
-                    let changes = blockobj.get("c");
+                    let changes = blockobj.get(CHANGESETS_FIELD);
                     if changes.is_some() && changes.unwrap().is_array() {
                         for c in changes.unwrap().as_array().unwrap() {
                             if c.is_array() {
@@ -425,11 +426,11 @@ impl Melda {
     pub fn reload(&mut self) -> Result<()> {
         self.documents.write().unwrap().clear();
         let mut rid = self.root_identifier.write().unwrap();
-        *rid = "root".to_string(); // Default
+        *rid = ROOT_ID.to_string(); // Default
         drop(rid);
         self.revision_update_records.write().unwrap().clear();
         let data = self.data.read().unwrap();
-        let list_str = data.list_raw_objects(".delta")?;
+        let list_str = data.list_raw_objects(DELTA_EXTENSION)?;
         drop(data);
         if !list_str.is_empty() {
             for i in &list_str {
@@ -489,7 +490,7 @@ impl Melda {
                 if !base_revision.is_deleted() {
                     let data = self.data.read().unwrap();
                     let mut obj = data.read_object(base_revision, rt).unwrap();
-                    obj.insert("_id".to_string(), Value::from(uuid.clone()));
+                    obj.insert(ID_FIELD.to_string(), Value::from(uuid.clone()));
                     let mut c_w = c.lock().unwrap();
                     c_w.insert(uuid.clone(), obj);
                     drop(c_w);
@@ -696,7 +697,7 @@ impl Melda {
         let mut r = Map::<String, Value>::new();
         let data = self.data.read().unwrap();
         let data_stage = data.stage()?;
-        r.insert("o".to_string(), data_stage);
+        r.insert(OBJECTS_FIELD.to_string(), data_stage);
         let mut revision_stage = Vec::<Value>::new();
         for (uuid, rev, prev) in self.revision_update_records.read().unwrap().iter() {
             if prev.is_none() {
@@ -711,20 +712,20 @@ impl Melda {
                 revision_stage.push(Value::from(triple));
             }
         }
-        r.insert("d".to_string(), Value::from(revision_stage));
+        r.insert(CHANGESETS_FIELD.to_string(), Value::from(revision_stage));
         Ok(Value::from(r))
     }
 
     pub fn replay_stage(&mut self, s: &Value) -> Result<()> {
         if s.is_object() {
             let s = s.as_object().unwrap();
-            if s.contains_key("o") {
-                let o = s.get("o").unwrap();
+            if s.contains_key(OBJECTS_FIELD) {
+                let o = s.get(OBJECTS_FIELD).unwrap();
                 let mut data = self.data.write().unwrap();
                 data.replay_stage(o)?;
             }
-            if s.contains_key("d") {
-                let d = s.get("d").unwrap();
+            if s.contains_key(CHANGESETS_FIELD) {
+                let d = s.get(CHANGESETS_FIELD).unwrap();
                 if d.is_array() {
                     for t in d.as_array().unwrap() {
                         let record = t.as_array().unwrap();

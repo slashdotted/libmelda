@@ -17,7 +17,10 @@ use crate::adapter::Adapter;
 use crate::revision::Revision;
 use crate::revisiontree::RevisionTree;
 use crate::utils::{
-    apply_diff_patch, digest_bytes, is_flattened_field, make_diff_patch, merge_arrays,
+    apply_diff_patch, digest_bytes, is_flattened_field, make_diff_patch, merge_arrays
+};
+use crate::constants::{
+    HASH_FIELD, PACK_EXTENSION, INDEX_EXTENSION, DELTA_PREFIX
 };
 use anyhow::{anyhow, bail, Result};
 use lru::LruCache;
@@ -27,8 +30,6 @@ use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
-
-const DELTA_PREFIX: &str = "\u{0394}";
 
 pub struct DataStorage {
     adapter: Arc<RwLock<Box<dyn Adapter>>>,
@@ -87,7 +88,7 @@ impl DataStorage {
 
     /// Loads a pack file (and rebuilds the index)
     fn load_pack(&mut self, pack: &String) -> Result<()> {
-        let object = pack.clone() + ".pack";
+        let object = pack.clone() + PACK_EXTENSION;
         let data = self
             .adapter
             .read()
@@ -133,7 +134,7 @@ impl DataStorage {
 
     /// Loads an index file
     fn load_index(&mut self, index: &String) -> Result<()> {
-        let object = index.clone() + ".index";
+        let object = index.clone() + INDEX_EXTENSION;
         let data = self
             .adapter
             .read()
@@ -152,8 +153,8 @@ impl DataStorage {
     pub fn reload(&mut self) -> Result<()> {
         self.pack.clear();
         self.objects.clear();
-        let pack_list = self.adapter.read().unwrap().list_objects(".pack")?;
-        let index_list = self.adapter.read().unwrap().list_objects(".index")?;
+        let pack_list = self.adapter.read().unwrap().list_objects(PACK_EXTENSION)?;
+        let index_list = self.adapter.read().unwrap().list_objects(INDEX_EXTENSION)?;
         let index_set = index_list.into_iter().collect::<HashSet<_>>();
         if !pack_list.is_empty() {
             for i in &pack_list {
@@ -169,7 +170,7 @@ impl DataStorage {
 
     /// Returns true if the pack is readable and valid (digest matches)
     pub fn is_readable_and_valid_pack(&self, pack: &str) -> Result<bool> {
-        let pack_name = pack.to_string() + ".pack";
+        let pack_name = pack.to_string() + PACK_EXTENSION;
         match self.adapter.read().unwrap().read_object(&pack_name, 0, 0) {
             Ok(data) => {
                 let d = digest_bytes(data.as_slice());
@@ -469,7 +470,7 @@ impl DataStorage {
     ) -> Result<Map<String, Value>> {
         if revision.digest.len() <= 8 && u32::from_str_radix(&revision.digest, 16).is_ok() {
             let mut o = Map::<String, Value>::new();
-            o.insert("#".to_string(), Value::from(revision.digest.clone()));
+            o.insert(HASH_FIELD.to_string(), Value::from(revision.digest.clone()));
             Ok(o)
         } else {
             self.read_merged_object(revision, rt)
@@ -562,7 +563,7 @@ impl DataStorage {
     pub fn read_data(&self, digest: &str) -> Result<Option<Value>> {
         if self.objects.contains_key(digest) {
             let (pack, offset, length) = self.objects.get(digest).unwrap();
-            let key = pack.clone() + ".pack";
+            let key = pack.clone() + PACK_EXTENSION;
             let data = self
                 .adapter
                 .read()
@@ -606,14 +607,14 @@ impl DataStorage {
         }
         buf.push(b']');
         let pack_digest = digest_bytes(buf.as_slice());
-        let pack_key = pack_digest.clone() + ".pack";
+        let pack_key = pack_digest.clone() + PACK_EXTENSION;
         let adapter = self.adapter.write().unwrap();
         adapter.write_object(&pack_key, buf.as_slice())?;
         drop(adapter);
         if buf.len() > 800 * index_map.len() {
             // 80 bytes is the estimated size of an index entry, use index only if the size is 10 times bigger
             // Only write the index if worth it
-            let index_key = pack_digest.clone() + ".index";
+            let index_key = pack_digest.clone() + INDEX_EXTENSION;
             let index_map_contents = serde_json::to_string(&index_map).unwrap();
             let adapter = self.adapter.write().unwrap();
             adapter.write_object(&index_key, index_map_contents.as_bytes())?;

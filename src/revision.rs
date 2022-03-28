@@ -18,6 +18,7 @@ use lazy_static::lazy_static;
 use regex::Regex;
 
 use crate::utils::digest_string;
+use crate::constants::{DELETED_HASH, EMPTY_HASH, RESOLVED_HASH};
 
 lazy_static! {
     static ref FULL_DELTA_REV: Regex =
@@ -92,19 +93,19 @@ impl Revision {
 
     /// Constructs a new deleted revision
     pub fn new_deleted(parent: &Revision) -> Revision {
-        Revision::new(parent.index + 1, "d".to_string(), Some(parent))
+        Revision::new(parent.index + 1, DELETED_HASH.to_string(), Some(parent))
     }
 
     /// Constructs a new empty revision
     #[allow(dead_code)]
     pub fn new_empty(parent: &Revision) -> Revision {
-        Revision::new(parent.index + 1, "e".to_string(), Some(parent))
+        Revision::new(parent.index + 1, EMPTY_HASH.to_string(), Some(parent))
     }
 
     /// Constructs a new resolved revision
     #[allow(dead_code)]
     pub fn new_resolved(parent: &Revision) -> Revision {
-        Revision::new(parent.index + 1, r#"r"#.to_string(), Some(parent))
+        Revision::new(parent.index + 1, RESOLVED_HASH.to_string(), Some(parent))
     }
 
     /// Constructs a new revision from a string
@@ -139,17 +140,17 @@ impl Revision {
 
     /// Returns true if the revision represents a deleted object
     pub fn is_deleted(&self) -> bool {
-        self.digest == r#"d"#
+        self.digest == DELETED_HASH
     }
 
     /// Returns true if the revision represents a resolved object
     pub fn is_resolved(&self) -> bool {
-        self.digest == r#"r"#
+        self.digest == RESOLVED_HASH
     }
 
     /// Returns true if the revision represents an empty object
     pub fn is_empty(&self) -> bool {
-        self.digest == r#"e"#
+        self.digest == EMPTY_HASH
     }
 
     pub fn is_delta(&self) -> bool {
