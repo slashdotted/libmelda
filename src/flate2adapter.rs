@@ -15,50 +15,42 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 use crate::adapter::Adapter;
 use anyhow::Result;
-use std::{cell::RefCell, collections::BTreeMap, sync::Mutex};
+use flate2::{read::DeflateDecoder, write::DeflateEncoder, Compression};
+use std::{sync::{Arc, RwLock}, io::{Read, Write}};
 
-pub struct MemoryAdapter {
-    data: Mutex<RefCell<BTreeMap<String, Vec<u8>>>>,
+pub struct Flate2Adapter {
+    backend: Arc<RwLock<Box<dyn Adapter>>>,
 }
 
-impl MemoryAdapter {
-    pub fn new() -> Self {
-        MemoryAdapter {
-            data: Mutex::new(RefCell::new(BTreeMap::<String, Vec<u8>>::new())),
+impl Flate2Adapter {
+    pub fn new(backend : Arc<RwLock<Box<dyn Adapter>>>) -> Self {
+        Flate2Adapter {
+            backend,
         }
     }
 }
 
-impl Adapter for MemoryAdapter {
+impl Adapter for Flate2Adapter {
     fn read_object(&self, key: &str, offset: usize, length: usize) -> Result<Vec<u8>> {
-        let mem = self.data.lock().unwrap();
-        let d = mem.borrow();
-        let data = d.get(key).unwrap();
+        let data = self.backend.read().unwrap().read_object(key, 0, 0)?;
+        let mut d = DeflateDecoder::new(data.as_slice());
+        let mut datavec = vec![];
+        d.read_to_end(&mut datavec)?;
         if offset == 0 && length == 0 {
-            Ok(data.clone())
+            Ok(datavec.clone())
         } else {
-            Ok(data.as_slice()[offset..offset + length].to_vec())
+            Ok(datavec.as_slice()[offset..offset + length].to_vec())
         }
     }
 
     fn write_object(&self, key: &str, data: &[u8]) -> Result<()> {
-        let mem = self.data.lock().unwrap();
-        let mut d = mem.borrow_mut();
-        if !d.contains_key(key) {
-            d.insert(key.to_string(), data.to_vec());
-        }
-        Ok(())
+        let mut e = DeflateEncoder::new(Vec::new(), Compression::default());
+        e.write_all(data)?;
+        let compressed = e.finish().unwrap();
+        self.backend.write().unwrap().write_object(key, compressed.as_slice())
     }
+
     fn list_objects(&self, ext: &str) -> Result<Vec<String>> {
-        let list: Vec<String> = self
-            .data
-            .lock()
-            .unwrap()
-            .borrow()
-            .keys()
-            .filter(|x| return x.ends_with(ext))
-            .map(|x| x.strip_suffix(ext).unwrap().to_string())
-            .collect();
-        Ok(list)
+        self.backend.read().unwrap().list_objects(ext)
     }
 }

@@ -1,4 +1,4 @@
-// Copyright (C) 2021 Amos Brocco <amos.brocco@supsi.ch>
+// Copyright (C) 2021-2022 Amos Brocco <amos.brocco@supsi.ch>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -13,8 +13,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 use fs_extra::dir::get_size;
-use melda::flate2filesystemadapter::Flate2FilesystemAdapter;
-use melda::{adapter::Adapter, filesystemadapter::FilesystemAdapter, melda::Melda};
+use melda::{adapter::Adapter, filesystemadapter::FilesystemAdapter, flate2adapter::Flate2Adapter, melda::Melda};
 use serde_json::{json, Map, Value};
 use std::sync::{Arc, RwLock};
 use std::{
@@ -101,7 +100,9 @@ fn main() {
         let file_adapter: Box<dyn Adapter> = if command == "buildreload" || command == "build" {
             Box::new(FilesystemAdapter::new(&dir).expect("cannot_initialize_adapter"))
         } else {
-            Box::new(Flate2FilesystemAdapter::new(&dir).expect("cannot_initialize_adapter"))
+            let fsadapter : Box<dyn Adapter> = Box::new(FilesystemAdapter::new(&dir).expect("cannot_initialize_adapter"));
+            let fsadapter = Arc::new(RwLock::new(fsadapter));
+            Box::new(Flate2Adapter::new(fsadapter))
         };
         let mut replica =
             Melda::new(Arc::new(RwLock::new(file_adapter))).expect("cannot_initialize_crdt");
@@ -229,7 +230,9 @@ fn main() {
         let file_adapter: Box<dyn Adapter> = if command == "read" {
             Box::new(FilesystemAdapter::new(&dir).expect("cannot_initialize_adapter"))
         } else {
-            Box::new(Flate2FilesystemAdapter::new(&dir).expect("cannot_initialize_adapter"))
+            let fsadapter : Box<dyn Adapter> = Box::new(FilesystemAdapter::new(&dir).expect("cannot_initialize_adapter"));
+            let fsadapter = Arc::new(RwLock::new(fsadapter));
+            Box::new(Flate2Adapter::new(fsadapter))
         };
         let replica =
             Melda::new(Arc::new(RwLock::new(file_adapter))).expect("cannot_initialize_crdt");

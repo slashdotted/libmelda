@@ -1,5 +1,5 @@
 // Melda - Delta State JSON CRDT
-// Copyright (C) 2021 Amos Brocco <amos.brocco@supsi.ch>
+// Copyright (C) 2021-2022 Amos Brocco <amos.brocco@supsi.ch>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -15,7 +15,7 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 pub mod adapter;
 pub mod filesystemadapter;
-pub mod flate2filesystemadapter;
+pub mod flate2adapter;
 pub mod melda;
 pub mod memoryadapter;
 pub mod solidadapter;
