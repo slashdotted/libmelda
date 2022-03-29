@@ -36,7 +36,7 @@ impl RevisionTree {
 
     /// Returns the winning revision
     pub fn winner(&self) -> Option<&Revision> {
-        match self.revisions.last() {
+        match self.revisions.iter().max() {
             Some((r, _)) => Some(r),
             None => None,
         }
