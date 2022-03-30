@@ -30,7 +30,26 @@ pub struct Melda {
     data: RwLock<DataStorage>,
     root_identifier: RwLock<String>,
     revision_update_records: RwLock<Vec<(String, Revision, Option<Revision>)>>,
+    loaded_blocks: Vec<String>,
 }
+
+// To implement snapshots (for example, to revert to a previous version)
+//
+// 1. After commit get the list of blocks using blocks()
+// 2. Save the list inside a special undo object
+// for example:
+// {
+//	"author" : "Amos",
+//	"date" : "2022-03-30-12:51",
+//	"description" : "Description of the update",
+//	"blocks" : [ ... list of blocks ... ]
+// }
+// 3. Store the object using the adapter methods (for exmaple with key HASH.undo, where hash
+//    is the digest of the object)
+// 4. If needed, retrieve undo points by listing objects by .undo extension (from the adapter).
+//    Objects can be sorted using one of the fields in the undo object.      
+// 5. (Optional) Verify that the required blocks are available (using adapter.list_objects(...))
+// 6. Reload only the selected blocks using melda.reload_only(...)
 
 impl Melda {
     /// Initializes a new data structure
@@ -41,6 +60,7 @@ impl Melda {
             data: RwLock::new(DataStorage::new(adapter.clone())),
             root_identifier: RwLock::new(ROOT_ID.to_string()),
             revision_update_records: RwLock::new(Vec::<(String, Revision, Option<Revision>)>::new()),
+            loaded_blocks: Vec::new()
         };
         dc.reload()?;
         Ok(dc)
@@ -227,6 +247,7 @@ impl Melda {
         data.write_raw_object(&blockid, blockstr.as_bytes())?;
         self.revision_update_records.write().unwrap().clear();
         log::debug!("commit {}", blockid);
+        self.loaded_blocks.push(blockid.clone());
         Ok(Some(blockid))
     }
 
@@ -412,11 +433,11 @@ impl Melda {
             .collect()
     }
 
-    pub fn value(&self, uuid: &str) -> Result<Map<String, Value>> {
+    pub fn value(&self, uuid: &str, revision: &str) -> Result<Map<String, Value>> {
+        let revision = Revision::from(revision).expect("invalid_revision_string");
         match self.documents.read().unwrap().get(uuid) {
             Some(o) => {
-                let w = o.winner().unwrap();
-                self.data.read().unwrap().read_object(w, o)
+                self.data.read().unwrap().read_object(&revision, o)
             }
             None => Err(anyhow!("invalid object uuid")),
         }
@@ -424,6 +445,14 @@ impl Melda {
 
     /// Reloads the data structure
     pub fn reload(&mut self) -> Result<()> {
+        self.reload_only(&Vec::new())
+    }
+
+    pub fn blocks(&self) -> Vec<String> {
+        self.loaded_blocks.clone()
+    }
+
+    pub fn reload_only(&mut self, blocks : &Vec<String>) -> Result<()> {
         self.documents.write().unwrap().clear();
         let mut rid = self.root_identifier.write().unwrap();
         *rid = ROOT_ID.to_string(); // Default
@@ -432,9 +461,13 @@ impl Melda {
         let data = self.data.read().unwrap();
         let list_str = data.list_raw_objects(DELTA_EXTENSION)?;
         drop(data);
+        self.loaded_blocks.clear();
         if !list_str.is_empty() {
             for i in &list_str {
-                self.load_block(i)?;
+                if blocks.contains(i) {
+                    self.load_block(i)?;
+                    self.loaded_blocks.push(i.clone());
+                }
             }
         }
         let mut data = self.data.write().unwrap();
@@ -655,13 +688,14 @@ impl Melda {
 
     /// Resolves a conflict by choosing the new winning revision
     /// All other conflicting revisions will be marked as resolved
-    pub fn resolve_as(&mut self, uuid: String, winner: &Revision) -> Result<()> {
+    pub fn resolve_as(&mut self, uuid: String, winner: &String) -> Result<()> {
         {
+            let winner = Revision::from(winner).expect("invalid_revision_string");
             let docs = self.documents.read().unwrap();
             let rt = docs.get(&uuid).ok_or(anyhow!("unknown_document"))?;
             let leafs = rt.leafs();
             // We can only resolve to a valid revision
-            if !leafs.contains(winner) {
+            if !leafs.contains(&winner) {
                 bail!("invalid_winner_revision");
             }
             // If there is only one leaf nothing needs to be resolved
@@ -670,7 +704,7 @@ impl Melda {
             }
             // Update the winner to ensure that we do not change the view
             let data = self.data.read().unwrap();
-            let merged = data.read_object(winner, rt)?;
+            let merged = data.read_object(&winner, rt)?;
             drop(data);
             drop(leafs);
             drop(rt);
@@ -714,6 +748,24 @@ impl Melda {
         }
         r.insert(CHANGESETS_FIELD.to_string(), Value::from(revision_stage));
         Ok(Value::from(r))
+    }
+
+    pub fn history(&self, uuid : &String, revision: &String) -> Result<Vec<String>> {
+        let docs = self.documents.read().unwrap();
+        let rt = docs.get(uuid).ok_or(anyhow!("unknown_document"))?;
+        let revision = Revision::from(revision).expect("invalid_revision_string");
+        let result : Vec<String> = rt.get_full_path(&revision).into_iter().map(|x| x.to_string()).collect();
+        Ok(result)
+    }
+
+    pub fn parent(&self, uuid : &String, revision: &String) -> Result<Option<String>> {
+        let docs = self.documents.read().unwrap();
+        let rt = docs.get(uuid).ok_or(anyhow!("unknown_document"))?;
+        let revision = Revision::from(revision).expect("invalid_revision_string");
+        match rt.parent(&revision) {
+            Some(r) => Ok(Some(r.to_string())),
+            None => Ok(None),
+        }
     }
 
     pub fn replay_stage(&mut self, s: &Value) -> Result<()> {
