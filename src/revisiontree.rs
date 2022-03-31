@@ -12,7 +12,7 @@
 // GNU General Public License for more details.
 //
 // You should have received a copy of the GNU General Public License
-// along with this program.  If not, see <http://www.gnu.org/licenses/>.
+// along with this program.  If not,ls see <http://www.gnu.org/licenses/>.
 use crate::revision::Revision;
 use std::{collections::BTreeSet, iter::FromIterator};
 
@@ -109,6 +109,31 @@ impl RevisionTree {
         path
     }
 
+    pub fn debug(&self) {
+        let mut all = self.all_revs();
+        for l in self.leafs() {
+            all.remove(l);
+            let path = self.get_full_path(l);
+            let first = path.first().unwrap();
+            if first.index != 1 {
+                eprintln!("\tDetached Leaf {}:", l.to_string());
+            } else {
+                eprintln!("\tLeaf {}:", l.to_string());
+            }
+            for r in path.iter() {
+                all.remove(r);
+                eprintln!("\t\t{}",r.to_string());
+            }
+
+        }
+        if ! all.is_empty() {
+            eprintln!("\tDetached revisions:");
+            for l in all {
+                eprintln!("\t\t{}:", l.to_string());
+            }
+        }
+    }
+
     /// Loads a path into the revision tree
     pub fn load_path(&mut self, path: Vec<String>) {
         let mut index: u32 = 1;
@@ -194,7 +219,7 @@ mod tests {
         assert!(l.contains(&crate::revision::Revision::from("3-abc_cde").unwrap()));
         assert!(l.contains(&crate::revision::Revision::from("4-xyz_cde").unwrap()));
         // Verify order
-        let lvec : Vec<&super::Revision> = l.into_iter().collect();
+        let lvec: Vec<&super::Revision> = l.into_iter().collect();
         assert!(*lvec[0] == crate::revision::Revision::from("3-abc_cde").unwrap());
         assert!(*lvec[1] == crate::revision::Revision::from("4-xyz_cde").unwrap());
         let w = rt.winner().unwrap();

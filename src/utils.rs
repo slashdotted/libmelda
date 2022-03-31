@@ -15,11 +15,13 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Map, Value};
-use yavomrs::yavom::{Move, Point, myers_unfilled};
 use std::collections::HashMap;
+use yavomrs::yavom::{myers_unfilled, Move, Point};
 
-use crate::constants::{FLATTEN_SUFFIX, STRING_ESCAPE_PREFIX, EMPTY_HASH, ID_FIELD, HASH_FIELD, ROOT_ID, PATCH_INSERT, PATCH_DELETE};
-
+use crate::constants::{
+    EMPTY_HASH, FLATTEN_SUFFIX, HASH_FIELD, ID_FIELD, PATCH_DELETE, PATCH_INSERT, ROOT_ID,
+    STRING_ESCAPE_PREFIX,
+};
 
 /// Returns true if the key matches a flattened field
 pub fn is_flattened_field(key: &str) -> bool {
@@ -215,22 +217,22 @@ pub fn make_diff_patch(old: &Vec<Value>, new: &Vec<Value>) -> Result<Vec<Value>>
     let ops = myers_unfilled(&old, &new);
     let mut patch = vec![];
     for o in ops {
-        let Move(op,s,t,_) = o;
+        let Move(op, s, t, _) = o;
         match op {
             yavomrs::yavom::OP::INSERT => {
                 let count = t.1 - s.1;
                 let from = s.1 as usize;
                 let to = (s.1 + count) as usize;
                 patch.push(json!([PATCH_INSERT, s.1, &new[from..to]]));
-            },
+            }
             yavomrs::yavom::OP::DELETE => {
                 let count = t.0 - s.0;
-                patch.push(json!([PATCH_DELETE, count, s.1])); 
-            },
+                patch.push(json!([PATCH_DELETE, count, s.1]));
+            }
             yavomrs::yavom::OP::_DELETE => {
                 let Point(count, start) = s;
-                patch.push(json!([PATCH_DELETE, count, start])); 
-            },
+                patch.push(json!([PATCH_DELETE, count, start]));
+            }
         }
     }
     Ok(patch)
@@ -263,7 +265,7 @@ pub fn apply_diff_patch(old: &mut Vec<Value>, patch: &Vec<Value>) -> Result<()> 
                 .clone();
             old.splice(index..index, items.into_iter());
         } else {
-            return Err(anyhow!("invalid_patch_op"))
+            return Err(anyhow!("invalid_patch_op"));
         }
     }
     Ok(())

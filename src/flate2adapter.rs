@@ -16,17 +16,18 @@
 use crate::adapter::Adapter;
 use anyhow::Result;
 use flate2::{read::DeflateDecoder, write::DeflateEncoder, Compression};
-use std::{sync::{Arc, RwLock}, io::{Read, Write}};
+use std::{
+    io::{Read, Write},
+    sync::{Arc, RwLock},
+};
 
 pub struct Flate2Adapter {
     backend: Arc<RwLock<Box<dyn Adapter>>>,
 }
 
 impl Flate2Adapter {
-    pub fn new(backend : Arc<RwLock<Box<dyn Adapter>>>) -> Self {
-        Flate2Adapter {
-            backend,
-        }
+    pub fn new(backend: Arc<RwLock<Box<dyn Adapter>>>) -> Self {
+        Flate2Adapter { backend }
     }
 }
 
@@ -47,7 +48,10 @@ impl Adapter for Flate2Adapter {
         let mut e = DeflateEncoder::new(Vec::new(), Compression::default());
         e.write_all(data)?;
         let compressed = e.finish().unwrap();
-        self.backend.write().unwrap().write_object(key, compressed.as_slice())
+        self.backend
+            .write()
+            .unwrap()
+            .write_object(key, compressed.as_slice())
     }
 
     fn list_objects(&self, ext: &str) -> Result<Vec<String>> {

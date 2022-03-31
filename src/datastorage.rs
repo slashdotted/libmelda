@@ -14,13 +14,11 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 use crate::adapter::Adapter;
+use crate::constants::{DELTA_PREFIX, HASH_FIELD, INDEX_EXTENSION, PACK_EXTENSION};
 use crate::revision::Revision;
 use crate::revisiontree::RevisionTree;
 use crate::utils::{
-    apply_diff_patch, digest_bytes, is_flattened_field, make_diff_patch, merge_arrays
-};
-use crate::constants::{
-    HASH_FIELD, PACK_EXTENSION, INDEX_EXTENSION, DELTA_PREFIX
+    apply_diff_patch, digest_bytes, is_flattened_field, make_diff_patch, merge_arrays,
 };
 use anyhow::{anyhow, bail, Result};
 use lru::LruCache;
@@ -269,7 +267,7 @@ impl DataStorage {
                 // Retrieve the parent revision
                 crev = match rt.parent(crev) {
                     Some(r) => r,
-                    None => return Err(anyhow!("failed_to_determine_parent {}", crev.to_string())),
+                    None => return Err(anyhow!("failed_to_determine_parent {} {:?}", crev.to_string(), reconstruction_path)),
                 };
             }
         }

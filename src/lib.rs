@@ -14,14 +14,13 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 pub mod adapter;
+mod constants;
+mod datastorage;
 pub mod filesystemadapter;
 pub mod flate2adapter;
 pub mod melda;
 pub mod memoryadapter;
-pub mod solidadapter;
-mod constants;
-mod datastorage;
 mod revision;
 mod revisiontree;
+pub mod solidadapter;
 mod utils;
-

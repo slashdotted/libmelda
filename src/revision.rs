@@ -17,8 +17,8 @@ use anyhow::{bail, Result};
 use lazy_static::lazy_static;
 use regex::Regex;
 
-use crate::utils::digest_string;
 use crate::constants::{DELETED_HASH, EMPTY_HASH, RESOLVED_HASH};
+use crate::utils::digest_string;
 
 lazy_static! {
     static ref FULL_DELTA_REV: Regex =
@@ -204,7 +204,8 @@ impl PartialOrd for Revision {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         if self.is_resolved() && other.is_resolved() {
             Some(self.to_string().cmp(&other.to_string()))
-        } else if self.is_resolved() { // Resolved revisions always have the least priority
+        } else if self.is_resolved() {
+            // Resolved revisions always have the least priority
             Some(std::cmp::Ordering::Less)
         } else if other.is_resolved() {
             Some(std::cmp::Ordering::Greater)
