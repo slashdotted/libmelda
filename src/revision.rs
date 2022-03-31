@@ -39,6 +39,7 @@ pub struct Revision {
 
 impl Revision {
     /// Returns the null revision
+    #[allow(dead_code)]
     pub fn null() -> Revision {
         Revision {
             index: 0 as u32,

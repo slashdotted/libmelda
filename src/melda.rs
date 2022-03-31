@@ -445,14 +445,14 @@ impl Melda {
 
     /// Reloads the data structure
     pub fn reload(&mut self) -> Result<()> {
-        self.reload_only(&Vec::new())
+        self.reload_only(None)
     }
 
     pub fn blocks(&self) -> Vec<String> {
         self.loaded_blocks.clone()
     }
 
-    pub fn reload_only(&mut self, blocks : &Vec<String>) -> Result<()> {
+    pub fn reload_only(&mut self, blocks : Option<&Vec<String>>) -> Result<()> {
         self.documents.write().unwrap().clear();
         let mut rid = self.root_identifier.write().unwrap();
         *rid = ROOT_ID.to_string(); // Default
@@ -464,7 +464,7 @@ impl Melda {
         self.loaded_blocks.clear();
         if !list_str.is_empty() {
             for i in &list_str {
-                if blocks.contains(i) {
+                if blocks.is_none() || blocks.unwrap().contains(i) {
                     self.load_block(i)?;
                     self.loaded_blocks.push(i.clone());
                 }
