@@ -22,5 +22,6 @@ pub mod melda;
 pub mod memoryadapter;
 mod revision;
 mod revisiontree;
-pub mod solidadapter;
 mod utils;
+#[cfg(feature="solid")]
+pub mod solidadapter;
