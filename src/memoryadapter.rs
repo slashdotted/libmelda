@@ -62,3 +62,87 @@ impl Adapter for MemoryAdapter {
         Ok(list)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::adapter::Adapter;
+
+    use super::MemoryAdapter;
+
+    #[test]
+    fn test_read_object() {
+        let sqa = MemoryAdapter::new();
+        assert!(sqa.list_objects(".delta").unwrap().is_empty());
+        assert!(sqa.write_object("somekey.delta", "somedata".as_bytes()).is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        let ro = sqa.read_object("somekey.delta", 0, 0);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "somedata");
+        let ro = sqa.read_object("somekey.delta", 1, 2);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "om");
+    }
+
+
+    #[test]
+    fn test_write_object() {
+        let sqa = MemoryAdapter::new();
+        assert!(sqa.list_objects(".delta").unwrap().is_empty());
+        assert!(sqa.write_object("somekey.delta", "somedata".as_bytes()).is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        let ro = sqa.read_object("somekey.delta", 0, 0);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "somedata");
+        // Add some other data
+        assert!(sqa.write_object("somekey.pack", "otherdata".as_bytes()).is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa.list_objects(".pack").unwrap().len() == 1);
+        assert!(sqa.list_objects("").unwrap().len() == 2);
+        let ro = sqa.read_object("somekey.pack", 0, 0);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "otherdata");
+        // Do not overwrite if already existing
+        assert!(sqa.write_object("somekey.pack", "updateddata".as_bytes()).is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa.list_objects(".pack").unwrap().len() == 1);
+        assert!(sqa.list_objects("").unwrap().len() == 2);
+        let ro = sqa.read_object("somekey.pack", 0, 0);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "otherdata");
+    }
+
+
+    #[test]
+    fn test_list_objects() {
+        let sqa = MemoryAdapter::new();
+        assert!(sqa.list_objects(".delta").unwrap().is_empty());
+        assert!(sqa.write_object("somekey.delta", "somedata".as_bytes()).is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa.write_object("somekey.pack", "otherdata".as_bytes()).is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa.list_objects(".pack").unwrap().len() == 1);
+        assert!(sqa.list_objects("").unwrap().len() == 2);
+        assert!(sqa.write_object("somekey.delta", "somedata".as_bytes()).is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa.write_object("somekey.pack", "otherdata".as_bytes()).is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa.list_objects(".pack").unwrap().len() == 1);
+        assert!(sqa.list_objects("").unwrap().len() == 2);
+    }
+
+}
