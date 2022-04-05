@@ -29,6 +29,14 @@ impl SqliteAdapter {
         bk.cn.lock().unwrap().borrow().execute("CREATE TABLE entries (key VARCHAR NOT NULL PRIMARY KEY, value VARCHAR NOT NULL)", []).unwrap();
         bk
     }
+
+    pub fn new_in_memory() -> Self {
+        let bk = SqliteAdapter {
+            cn: Mutex::new(RefCell::new(rusqlite::Connection::open_in_memory().unwrap())),
+        };
+        bk.cn.lock().unwrap().borrow().execute("CREATE TABLE entries (key VARCHAR NOT NULL PRIMARY KEY, value VARCHAR NOT NULL)", []).unwrap();
+        bk
+    }
 }
 
 impl Adapter for SqliteAdapter {
@@ -55,8 +63,10 @@ impl Adapter for SqliteAdapter {
         let mcn = self.cn.lock().unwrap();
         let cn = mcn.borrow_mut();
         let value = String::from_utf8(data.to_vec()).unwrap();
-        cn.execute("INSERT INTO entries (key, value) VALUES (?1,?2)", &[&key, &value.as_str()])?;
-        Ok(())
+        match cn.execute("INSERT OR IGNORE INTO entries (key, value) VALUES (?1,?2)", &[&key, &value.as_str()]) {
+            Ok(_) => Ok(()),
+            Err(_) => Err(anyhow::anyhow!("cannot_write_object")),
+        }
     }
 
     fn list_objects(&self, ext: &str) -> Result<Vec<String>> {
@@ -77,26 +87,84 @@ impl Adapter for SqliteAdapter {
 
 #[cfg(test)]
 mod tests {
+    use crate::adapter::Adapter;
 
-    #[test]
-    fn test_create() {
-    }
+    use super::SqliteAdapter;
 
     #[test]
     fn test_read_object() {
-
+        let sqa = SqliteAdapter::new_in_memory();
+        assert!(sqa.list_objects(".delta").unwrap().is_empty());
+        assert!(sqa.write_object("somekey.delta", "somedata".as_bytes()).is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        let ro = sqa.read_object("somekey.delta", 0, 0);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "somedata");
+        let ro = sqa.read_object("somekey.delta", 1, 2);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "om");
     }
 
 
     #[test]
     fn test_write_object() {
-
+        let sqa = SqliteAdapter::new_in_memory();
+        assert!(sqa.list_objects(".delta").unwrap().is_empty());
+        assert!(sqa.write_object("somekey.delta", "somedata".as_bytes()).is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        let ro = sqa.read_object("somekey.delta", 0, 0);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "somedata");
+        // Add some other data
+        assert!(sqa.write_object("somekey.pack", "otherdata".as_bytes()).is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa.list_objects(".pack").unwrap().len() == 1);
+        assert!(sqa.list_objects("").unwrap().len() == 2);
+        let ro = sqa.read_object("somekey.pack", 0, 0);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "otherdata");
+        // Do not overwrite if already existing
+        assert!(sqa.write_object("somekey.pack", "updateddata".as_bytes()).is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa.list_objects(".pack").unwrap().len() == 1);
+        assert!(sqa.list_objects("").unwrap().len() == 2);
+        let ro = sqa.read_object("somekey.pack", 0, 0);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "otherdata");
     }
 
 
     #[test]
     fn test_list_objects() {
-
+        let sqa = SqliteAdapter::new_in_memory();
+        assert!(sqa.list_objects(".delta").unwrap().is_empty());
+        assert!(sqa.write_object("somekey.delta", "somedata".as_bytes()).is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa.write_object("somekey.pack", "otherdata".as_bytes()).is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa.list_objects(".pack").unwrap().len() == 1);
+        assert!(sqa.list_objects("").unwrap().len() == 2);
+        assert!(sqa.write_object("somekey.delta", "somedata".as_bytes()).is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa.write_object("somekey.pack", "otherdata".as_bytes()).is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa.list_objects(".pack").unwrap().len() == 1);
+        assert!(sqa.list_objects("").unwrap().len() == 2);
     }
 
 }
