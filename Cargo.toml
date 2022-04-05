@@ -26,8 +26,11 @@ oxiri = { version = ">=0.1,<0.3", optional = true }
 cacache = { version = "8.0.0", optional = true }
 lru = { version = "0.6.6", optional = true }
 
-[features]
-default = [ "solid" ]
-solid =  [ "reqwest", "rio_api", "rio_turtle", "oxiri", "cacache", "lru"]
+# SQLite Adapter dependencies
+rusqlite = { version = "0.27.0", optional = true }
 
+[features]
+default = [ "solid", "sqlitedb" ]
+solid =  [ "reqwest", "rio_api", "rio_turtle", "oxiri", "cacache", "lru"]
+sqlitedb = [ "rusqlite"]
 

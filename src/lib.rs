@@ -25,3 +25,5 @@ mod revisiontree;
 mod utils;
 #[cfg(feature="solid")]
 pub mod solidadapter;
+#[cfg(feature="sqlitedb")]
+pub mod sqliteadapter;
