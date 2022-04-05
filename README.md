@@ -20,7 +20,7 @@ let dir = "... path to a folder ...";
 let file_adapter : Box<dyn Adapter> = Box::new(FilesystemAdapter::new(&dir).expect("cannot_initialize_adapter"));
 let mut replica = Melda::new(Arc::new(RwLock::new(file_adapter))).expect("cannot_initialize_crdt");
 ```
-To update the data structure call the *update* procedure:
+Other available backends are MemoryAdapter (which stores data in RAM), SolidAdapter (which uses a Solid Pod), and SQLiteAdapter (which stores data into a SQLite database file). To update the data structure call the *update* procedure:
 
 ```rust
 let mut base_doc = json!({ }).as_object().unwrap().clone();
@@ -51,7 +51,15 @@ In the benchmark directory you will find a benchmark comparing Melda to Automerg
 
 # Example integration
 
-In the kibi directory you will find an example of integration of Melda into a text-editor
+In the kibi directory you will find an example of integration of Melda into a text-editor. There is also another project [libmelda-tools](https://github.com/slashdotted/libmelda-tools/) which implements a simple command line tool to update, read, and meld Melda structures.
+
+# Publications
+
+## 2022
+Amos Brocco "Melda: A General Purpose Delta State JSON CRDT". 9th Workshop on Principles and Practice of Consistency for Distributed Data (PaPoC'22). April 2022. (Accepted)
+
+## 2021
+Amos Brocco "Delta-State JSON CRDT: Putting Collaboration on Solid Ground". (Brief announcement). 23rd International Symposium on Stabilization, Safety, and Security of Distributed Systems (SSS 2021). November 2021. 
 
 # License
 (c)2021 Amos Brocco,
