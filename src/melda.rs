@@ -16,7 +16,7 @@
 use crate::adapter::Adapter;
 use crate::constants::{
     CHANGESETS_FIELD, DELTA_EXTENSION, ID_FIELD, INFORMATION_FIELD, OBJECTS_FIELD, PACK_FIELD,
-    ROOT_ID, PARENTS_FIELD, PACK_EXTENSION,
+    ROOT_ID, PARENTS_FIELD,
 };
 use crate::datastorage::DataStorage;
 use crate::revision::Revision;
