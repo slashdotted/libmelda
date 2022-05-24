@@ -570,8 +570,8 @@ impl Melda {
     pub fn get_anchors(&self) -> BTreeSet<String> {
         let blocks = self.blocks.read().unwrap();
         // Return the identifiers of all blocks which are not referenced as parents
-        let mut anchors: BTreeSet<&String> = blocks.iter().map(|(k,_) | k).collect();
-        blocks.values().for_each(|b| {
+        let mut anchors: BTreeSet<&String> = blocks.iter().filter(|(_, block)| block.read().unwrap().status == Status::ValidAndApplied).map(|(k,_) | k).collect();
+        blocks.iter().filter(|(_, block)| block.read().unwrap().status == Status::ValidAndApplied).for_each(|(_, b)| {
             let block = b.read().unwrap();
             let parents = &block.parents.as_ref();
             if let Some(pr) = parents {
