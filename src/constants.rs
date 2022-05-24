@@ -30,14 +30,12 @@ pub const DELTA_EXTENSION: &str = r#".delta"#;
 pub const INDEX_EXTENSION: &str = r#".index"#;
 /// Default root object identifier
 pub const ROOT_ID: &str = r#"@"#;
-/// Root field key (inside delta blocks)
-pub const ROOT_FIELD: &str = r#"r"#;
+/// Parents field key (inside delta blocks)
+pub const PARENTS_FIELD: &str = r#"p"#;
 /// Changesets field key (inside delta blocks and stages)
 pub const CHANGESETS_FIELD: &str = r#"c"#;
 /// Object map field key (inside stages)
 pub const OBJECTS_FIELD: &str = r#"o"#;
-/// Full changesets field key (inside delta blocks)
-pub const FULL_CHANGESETS_FIELD: &str = r#"C"#;
 /// Information field key (inside delta blocks)
 pub const INFORMATION_FIELD: &str = r#"i"#;
 /// Pack field inside delta blocks

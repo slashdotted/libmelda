@@ -30,8 +30,15 @@ impl RevisionTree {
     }
 
     /// Add new revision, parent tuple
-    pub fn add(&mut self, revision: Revision, parent: Option<Revision>) {
-        self.revisions.insert((revision, parent));
+    /// This method returns true if the pair has been added, false if it already exists
+    pub fn add(&mut self, revision: Revision, parent: Option<Revision>) -> bool {
+        self.revisions.insert((revision, parent))
+    }
+
+    /// Removes an existing revision, parent tuple
+    /// This methods returns true if the pair was present (and then removed), false otherwise
+    pub fn remove(&mut self, revision: Revision, parent: Option<Revision>) -> bool {
+        self.revisions.remove(&(revision, parent))
     }
 
     /// Returns the winning revision
@@ -122,11 +129,10 @@ impl RevisionTree {
             }
             for r in path.iter() {
                 all.remove(r);
-                eprintln!("\t\t{}",r.to_string());
+                eprintln!("\t\t{}", r.to_string());
             }
-
         }
-        if ! all.is_empty() {
+        if !all.is_empty() {
             eprintln!("\tDetached revisions:");
             for l in all {
                 eprintln!("\t\t{}:", l.to_string());
