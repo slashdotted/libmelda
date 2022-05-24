@@ -567,7 +567,7 @@ impl Melda {
     }
 
     // FIXME: Reimplement using LWBlocks inside the state
-    fn anchors(&self) -> BTreeSet<String> {
+    pub fn anchors(&self) -> BTreeSet<String> {
         let blocks = self.blocks.read().unwrap();
         // Return the identifiers of all blocks which are not referenced as parents
         let mut anchors: BTreeSet<&String> = blocks.iter().map(|(k,_) | k).collect();
