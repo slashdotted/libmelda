@@ -331,7 +331,7 @@ impl Melda {
         // Insert pack indentifer
         if _packid.is_some() {
             let packs = vec![_packid.unwrap()];
-            block.insert(PACK_EXTENSION.to_string(), Value::from(packs));
+            block.insert(PACK_FIELD.to_string(), Value::from(packs));
         }
         let blockstr = serde_json::to_string(&block).unwrap();
         let blockid = digest_string(&blockstr) + DELTA_EXTENSION;
