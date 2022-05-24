@@ -39,7 +39,7 @@ pub struct Melda {
 }
 
 
-#[derive(PartialEq,Copy,Clone)]
+#[derive(PartialEq,Copy,Clone,Debug)]
 
 pub enum Status {
     Unknown,
@@ -515,6 +515,7 @@ impl Melda {
                 return status;
             }
             // Verify that all packs are available
+            status = Status::Valid;
             if let Some(pks) = &block.read().unwrap().packs {
                 if ! pks.par_iter().all(|pack| packs.contains(pack)) {
                     status = Status::Invalid;
@@ -523,7 +524,7 @@ impl Melda {
             if status == Status::Valid {
                 // Verify that all parent blocks are status
                 if let Some(parents) = &block.read().unwrap().parents {
-                    if ! parents.iter().all(|parent| self.check_block(parent) != Status::Valid) {
+                    if ! parents.iter().all(|parent| self.check_block(parent) != Status::Invalid) {
                         status = Status::Invalid;
                     }
                 };
@@ -568,19 +569,18 @@ impl Melda {
 
     // FIXME: Reimplement using LWBlocks inside the state
     pub fn get_anchors(&self) -> BTreeSet<String> {
-        let blocks = self.blocks.read().unwrap();
+        let blocks_r = self.blocks.read().unwrap();
         // Return the identifiers of all blocks which are not referenced as parents
-        let mut anchors: BTreeSet<&String> = blocks.iter().filter(|(_, block)| block.read().unwrap().status == Status::ValidAndApplied).map(|(k,_) | k).collect();
-        blocks.iter().filter(|(_, block)| block.read().unwrap().status == Status::ValidAndApplied).for_each(|(_, b)| {
-            let block = b.read().unwrap();
-            let parents = &block.parents.as_ref();
-            if let Some(pr) = parents {
-                for p in *pr {
+        let mut anchors: BTreeSet<String> = blocks_r.iter().filter(|(_, block)| block.read().unwrap().status == Status::ValidAndApplied).map(|(k,_) | k.clone()).collect();
+        blocks_r.iter().filter(|(_, block)| block.read().unwrap().status == Status::ValidAndApplied).for_each(|(_, b)| {
+            let block_r = b.read().unwrap();
+            if let Some(pr) = &block_r.parents {
+                for p in pr {
                     anchors.remove(p);
                 }
             }
         });
-        anchors.iter().map(|a| a.to_string()).collect()
+        anchors
     }
 
     pub fn reload(&mut self) -> Result<()> {
@@ -617,10 +617,14 @@ impl Melda {
         self.blocks.read().unwrap().iter().for_each(|(_, block)| {
             let status = block.read().unwrap().status;
             if status == Status::Valid {
-                if let Ok(_) = self.apply_block(&block.read().unwrap()) {
-                    block.write().unwrap().status = Status::ValidAndApplied;
+                drop(status);
+                let block_r = block.read().unwrap();
+                if let Ok(_) = self.apply_block(&block_r) {
+                    drop(block_r);
+                    let mut block_w = block.write().unwrap();
+                    block_w.status = Status::ValidAndApplied;
                     // We can drop the changes vector
-                    block.write().unwrap().changes = None;
+                    block_w.changes = None;
                 }
             }
             
@@ -852,7 +856,6 @@ impl Melda {
                 let w = rt.winner().unwrap().clone();
                 if !w.is_deleted() && !w.is_resolved() {
                     let rev = Revision::new_deleted(&w);
-                    eprintln!("deleted {}: {} -> {}", uuid, w.to_string(), rev.to_string());
                     rt.add(rev.clone(), Some(w.clone()));
                     self.stage.write().unwrap().push(Change(
                         uuid.clone(),
@@ -885,7 +888,6 @@ impl Melda {
                         let delta_digest = digest_object(&delta).unwrap();
                         let rev =
                             Revision::new_with_delta(w.index + 1, digest, delta_digest, Some(&w));
-                        eprintln!("update {}: {} -> {}", uuid, w.to_string(), rev.to_string());
                         let mut docs_w = self.documents.write().unwrap();
                         let rt = docs_w.get_mut(uuid).unwrap();
                         rt.add(rev.clone(), Some(w.clone()));
@@ -901,7 +903,6 @@ impl Melda {
                     } else {
                         // There were no delta fields or the object should not be "delta-ed"
                         let rev = Revision::new(w.index + 1, digest, Some(&w));
-                        eprintln!("update {}: {} -> {}", uuid, w.to_string(), rev.to_string());
                         let mut docs_w = self.documents.write().unwrap();
                         let rt = docs_w.get_mut(uuid).unwrap();
                         rt.add(rev.clone(), Some(w.clone()));
@@ -918,7 +919,6 @@ impl Melda {
             } else {
                 let mut rt = RevisionTree::new();
                 let rev = Revision::new(1u32, digest_object(&obj).unwrap(), None);
-                eprintln!("create {}: {}", uuid, rev.to_string());
                 let mut data_w = self.data.write().unwrap();
                 data_w.write_object(&rev, obj.clone(), None).unwrap();
                 drop(data_w);
@@ -1025,7 +1025,7 @@ impl Melda {
     pub fn debug(&self) {
         let docs = self.documents.read().unwrap();
         for (docid, rt) in docs.iter() {
-            eprintln!("Document {}:", docid);
+            eprintln!("{}", docid);
             rt.debug();
         }
     }
@@ -1110,13 +1110,11 @@ impl Melda {
                 let s = s.as_object().unwrap();
                 if s.contains_key(OBJECTS_FIELD) {
                     let o = s.get(OBJECTS_FIELD).unwrap();
-                    eprintln!("Replay object stage {:?}", o);
                     let mut data = self.data.write().unwrap();
                     data.replay_stage(o)?;
                 }
                 if s.contains_key(CHANGESETS_FIELD) {
                     let changes = s.get(CHANGESETS_FIELD);
-                    eprintln!("Replay changes stage {:?}", changes);
                     if changes.is_some() && changes.unwrap().is_array() {
                         for c in changes.unwrap().as_array().unwrap() {
                             if c.is_array() {

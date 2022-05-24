@@ -60,6 +60,7 @@ impl Adapter for Flate2Adapter {
 }
 
 mod tests {
+    #[allow(unused_imports)]
     use crate::{adapter::Adapter, flate2adapter::Flate2Adapter, memoryadapter::MemoryAdapter};
 
     #[test]
