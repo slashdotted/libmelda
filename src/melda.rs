@@ -87,6 +87,30 @@ impl Melda {
         Ok(dc)
     }
 
+    /// Initializes a new Melda data structure using the provided adapter and loads until the given block
+    ///
+    /// # Arguments
+    ///
+    /// * `adapter` - The backend adapter used to persist the data on commit
+    /// * `block` - Block identifier
+    ///
+    /// # Example
+    /// ```
+    /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new().expect("cannot_initialize_adapter"));
+    /// let mut replica = Melda::new(Arc::new(RwLock::new(fadapter, "fefefefefefefefef"))).expect("cannot_initialize_crdt"); 
+    /// ```
+    pub fn new_until(adapter: Arc<RwLock<Box<dyn Adapter>>>, block: &str) -> Result<Melda> {
+        let mut dc = Melda {
+            documents: RwLock::new(BTreeMap::<String, RevisionTree>::new()),
+            data: RwLock::new(DataStorage::new(adapter.clone())),
+            stage: RwLock::new(Vec::<Change>::new()),
+            blocks: RwLock::new(BTreeMap::new())
+        };
+        dc.reload_until(block)?;
+        Ok(dc)
+    }
+
     /// Records the creation of an object
     ///
     /// # Arguments
