@@ -217,6 +217,16 @@ impl DataStorage {
         }
     }
 
+    pub fn replicate(&mut self, other: &DataStorage) -> Result<()> {
+        for p in &other.loaded_packs {
+            if ! self.loaded_packs.contains(p) {
+                let rawdata = self.read_raw_object(&p, 0, 0)?;
+                self.write_raw_object(p, &rawdata)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Writes an object associating it with the given revision (digest)
     pub fn write_object(
         &mut self,
@@ -304,7 +314,7 @@ impl DataStorage {
                 // Store this delta revision in the reconstruction path
                 reconstruction_path.push(crev);
                 // Retrieve the parent revision
-                crev = match rt.parent(crev) {
+                crev = match rt.get_parent(crev) {
                     Some(r) => r,
                     None => {
                         return Err(anyhow!(
@@ -425,7 +435,7 @@ impl DataStorage {
         base_revision: &Revision,
         rt: &RevisionTree,
     ) -> Result<Map<String, Value>> {
-        let leafs = rt.leafs();
+        let leafs = rt.get_leafs();
         // The base object corresponds to the revision we want to keep
         let base_object = self.read_full_object(base_revision, rt)?;
         if leafs.len() > 1 {
@@ -532,7 +542,7 @@ impl DataStorage {
     ) -> Result<Option<Map<String, Value>>> {
         // Reference object that might be loaded and used if there is a delta field
         let mut delta_reference_object: Option<Map<String, Value>> = None;
-        let delta_reference_revision = rt.winner();
+        let delta_reference_revision = rt.get_winner();
         if let Some(r) = delta_reference_revision {
             if self.force_full_array_interval != 0 && r.index % self.force_full_array_interval == 0
             {

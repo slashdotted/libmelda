@@ -42,7 +42,7 @@ impl RevisionTree {
     }
 
     /// Returns the winning revision
-    pub fn winner(&self) -> Option<&Revision> {
+    pub fn get_winner(&self) -> Option<&Revision> {
         match self.revisions.iter().max() {
             Some((r, _)) => Some(r),
             None => None,
@@ -50,13 +50,17 @@ impl RevisionTree {
     }
 
     /// Returns all revisions
-    pub fn all_revs(&self) -> BTreeSet<&Revision> {
+    pub fn get_all_revs(&self) -> BTreeSet<&Revision> {
         FromIterator::from_iter(self.revisions.iter().map(|(revision, _)| revision))
     }
 
+    pub fn get_revisions(&self) -> &BTreeSet<(Revision, Option<Revision>)> {
+        &self.revisions
+    }
+
     /// Returns leafs revisions
-    pub fn leafs(&self) -> BTreeSet<&Revision> {
-        let mut leafs = self.all_revs();
+    pub fn get_leafs(&self) -> BTreeSet<&Revision> {
+        let mut leafs = self.get_all_revs();
         self.revisions.iter().for_each(|(rev, parent)| {
             if rev.is_resolved() {
                 leafs.remove(rev);
@@ -74,7 +78,7 @@ impl RevisionTree {
     }
 
     /// Returns the parent of a revision
-    pub fn parent(&self, revision: &Revision) -> Option<&Revision> {
+    pub fn get_parent(&self, revision: &Revision) -> Option<&Revision> {
         self.revisions.iter().find_map(|(rev, parent)| {
             if rev == revision {
                 match parent {
@@ -92,11 +96,11 @@ impl RevisionTree {
     pub fn get_path<'a>(&'a self, revision: &'a Revision) -> Vec<&'a String> {
         let mut path = Vec::<&String>::new();
         path.push(&revision.digest);
-        let mut p = self.parent(revision);
+        let mut p = self.get_parent(revision);
         while p.is_some() {
             let pr = p.unwrap();
             path.push(&pr.digest);
-            p = self.parent(pr);
+            p = self.get_parent(pr);
         }
         path.reverse();
         path
@@ -107,19 +111,19 @@ impl RevisionTree {
     pub fn get_full_path<'a>(&'a self, revision: &'a Revision) -> Vec<&'a Revision> {
         let mut path = vec![];
         path.push(revision);
-        let mut p = self.parent(revision);
+        let mut p = self.get_parent(revision);
         while p.is_some() {
             let pr = p.unwrap();
             path.push(pr);
-            p = self.parent(pr);
+            p = self.get_parent(pr);
         }
         path.reverse();
         path
     }
 
     pub fn debug(&self) {
-        let mut all = self.all_revs();
-        for l in self.leafs() {
+        let mut all = self.get_all_revs();
+        for l in self.get_leafs() {
             all.remove(l);
             let path = self.get_full_path(l);
             let first = path.first().unwrap();
@@ -190,7 +194,7 @@ mod tests {
             crate::revision::Revision::from("2-abc_cde").unwrap(),
             crate::revision::Revision::from("1-abc").ok(),
         );
-        let w = rt.winner().unwrap();
+        let w = rt.get_winner().unwrap();
         assert!(w.to_string() == "3-xyz_cde");
     }
 
@@ -222,7 +226,7 @@ mod tests {
             crate::revision::Revision::from("2-abc_cde").unwrap(),
             crate::revision::Revision::from("1-abc").ok(),
         );
-        let l = rt.leafs();
+        let l = rt.get_leafs();
         assert!(l.len() == 2);
         assert!(l.contains(&crate::revision::Revision::from("3-abc_cde").unwrap()));
         assert!(l.contains(&crate::revision::Revision::from("4-xyz_cde").unwrap()));
@@ -230,7 +234,7 @@ mod tests {
         let lvec: Vec<&super::Revision> = l.into_iter().collect();
         assert!(*lvec[0] == crate::revision::Revision::from("3-abc_cde").unwrap());
         assert!(*lvec[1] == crate::revision::Revision::from("4-xyz_cde").unwrap());
-        let w = rt.winner().unwrap();
+        let w = rt.get_winner().unwrap();
         assert!(lvec[1] == w);
     }
 }

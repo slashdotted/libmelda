@@ -170,7 +170,7 @@ impl Melda {
         match docs_r.get(&uuid) {
             Some(rt) => {
                 let digest = digest_object(&obj)?; // Digest of the "full" object
-                let w = rt.winner().unwrap().clone(); // Winning revision
+                let w = rt.get_winner().unwrap().clone(); // Winning revision
                 if digest.ne(&w.digest) {
                     // The w.digest corresponds to the "full" object
                     let data_r = self.data.read().expect("cannot_acquire_data_for_reading");
@@ -244,7 +244,7 @@ impl Melda {
     pub fn delete_object(&mut self, uuid: &String) -> Result<()> {
         match self.documents.write().unwrap().get_mut(uuid) {
             Some(rt) => {
-                let w = rt.winner().unwrap().clone();
+                let w = rt.get_winner().unwrap().clone();
                 if !w.is_deleted() && !w.is_resolved() {
                     let rev = Revision::new_deleted(&w);
                     rt.add(rev.clone(), Some(w.clone()));
@@ -810,6 +810,39 @@ impl Melda {
         Ok(result)
     }
 
+    pub fn replicate(&mut self, other: &Melda) -> Result<()> {
+        let other_data = other.data.read().unwrap();
+        let other_documents = other.documents.read().unwrap();
+        let other_stage = other.stage.read().unwrap();
+        if !self.stage.read().unwrap().is_empty() {
+            bail!("stage_not_empty")
+        }
+        if !other_stage.is_empty() {
+            bail!("other_stage_not_empty")
+        }
+        self.data.write().expect("cannot_get_data_for_writing").replicate(&other_data)?;
+        for (d,other_rt) in other_documents.iter() {
+            let mut docs_w = self.documents.write().expect("cannot_get_documents_for_writing");
+            if ! docs_w.contains_key(d) {
+                let mut rt = RevisionTree::new();
+                for (rev,prev) in other_rt.get_revisions() {
+                    if rt.add(rev.clone(), prev.clone()) {
+                        self.stage.write().expect("cannot_get_stage_for_writing").push(Change(d.clone(), rev.clone(), prev.clone()));
+                    }
+                }
+                docs_w.insert(d.clone(), rt);
+            } else {
+                let rt = docs_w.get_mut(d).unwrap();
+                for (rev,prev) in other_rt.get_revisions() {
+                    if rt.add(rev.clone(), prev.clone()) {
+                        self.stage.write().expect("cannot_get_stage_for_writing").push(Change(d.clone(), rev.clone(), prev.clone()));
+                    }
+                }
+            };
+        }
+        Ok(())
+    }
+
     /// Reads the current state of the data structure and returns the resulting object
     pub fn read(&self) -> Result<Value> {
         if !self.documents.read().unwrap().contains_key(ROOT_ID) {
@@ -818,7 +851,7 @@ impl Melda {
             let c = Mutex::new(HashMap::<String, Map<String, Value>>::new());
             let docs_r = self.documents.read().unwrap();
             docs_r.par_iter().for_each(|(uuid, rt)| {
-                let base_revision = rt.winner().ok_or(anyhow!("no_winner")).unwrap();
+                let base_revision = rt.get_winner().ok_or(anyhow!("no_winner")).unwrap();
                 if !base_revision.is_deleted() {
                     let data = self.data.read().unwrap();
                     let mut obj = data.read_object(base_revision, rt).unwrap();
@@ -853,7 +886,7 @@ impl Melda {
             .par_iter_mut()
             .filter(|(uuid, _)| !c.contains_key(*uuid))
             .for_each(|(uuid, rt)| {
-                let w = rt.winner().unwrap().clone();
+                let w = rt.get_winner().unwrap().clone();
                 if !w.is_deleted() && !w.is_resolved() {
                     let rev = Revision::new_deleted(&w);
                     rt.add(rev.clone(), Some(w.clone()));
@@ -872,7 +905,7 @@ impl Melda {
             drop(docs_r);
             if has_rt {
                 let docs_r = self.documents.read().unwrap();
-                let w = docs_r.get(uuid).unwrap().winner().unwrap().clone(); // Winning revision
+                let w = docs_r.get(uuid).unwrap().get_winner().unwrap().clone(); // Winning revision
                 drop(docs_r);
                 let digest = digest_object(&obj).unwrap(); // Digest of the "full" object
                 if digest.ne(&w.digest) {
@@ -941,7 +974,7 @@ impl Melda {
     pub fn in_conflict(&self) -> Vec<String> {
         let mut result = vec![];
         self.documents.read().unwrap().iter().for_each(|(d, rt)| {
-            let l = rt.leafs();
+            let l = rt.get_leafs();
             if l.len() > 1 {
                 result.push(d.clone());
             }
@@ -955,7 +988,7 @@ impl Melda {
         T: AsRef<str>,
     {
         match self.documents.read().unwrap().get(uuid.as_ref()) {
-            Some(rt) => match rt.winner() {
+            Some(rt) => match rt.get_winner() {
                 Some(r) => Ok(r.to_string()),
                 None => Err(anyhow!("no_winner")),
             },
@@ -970,8 +1003,8 @@ impl Melda {
     {
         match self.documents.read().unwrap().get(uuid.as_ref()) {
             Some(rt) => {
-                let w = rt.winner().ok_or(anyhow!("no_winner"))?;
-                let l = rt.leafs();
+                let w = rt.get_winner().ok_or(anyhow!("no_winner"))?;
+                let l = rt.get_leafs();
                 Ok(l.iter()
                     .filter(|r| w.ne(r))
                     .map(|r| r.to_string())
@@ -988,7 +1021,7 @@ impl Melda {
             let winner = Revision::from(winner).expect("instatus_revision_string");
             let docs = self.documents.read().unwrap();
             let rt = docs.get(&uuid).ok_or(anyhow!("unknown_document"))?;
-            let leafs = rt.leafs();
+            let leafs = rt.get_leafs();
             // We can only resolve to a status revision
             if !leafs.contains(&winner) {
                 bail!("instatus_winner_revision");
@@ -1008,11 +1041,11 @@ impl Melda {
         }
         let docs = self.documents.read().unwrap();
         let rt = docs.get(&uuid).ok_or(anyhow!("unknown_document"))?;
-        let winner = rt.winner().expect("revision_tree_instatus_state").clone();
+        let winner = rt.get_winner().expect("revision_tree_instatus_state").clone();
         // Seal all other revisions as resolved
         let mut docs = self.documents.write().unwrap();
         let rt = docs.get_mut(&uuid).ok_or(anyhow!("unknown_document"))?;
-        let leafs: Vec<Revision> = rt.leafs().iter().map(|r| (*r).clone()).collect();
+        let leafs: Vec<Revision> = rt.get_leafs().iter().map(|r| (*r).clone()).collect();
         for r in leafs {
             if r != winner {
                 let resolved = Revision::new_resolved(&r);
@@ -1097,7 +1130,7 @@ impl Melda {
         let docs = self.documents.read().unwrap();
         let rt = docs.get(uuid).ok_or(anyhow!("unknown_document"))?;
         let revision = Revision::from(revision).expect("instatus_revision_string");
-        match rt.parent(&revision) {
+        match rt.get_parent(&revision) {
             Some(r) => Ok(Some(r.to_string())),
             None => Ok(None),
         }
