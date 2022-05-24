@@ -323,7 +323,7 @@ impl Melda {
             );
         }
         // Insert anchors
-        let anchors_blocks = self.anchors();
+        let anchors_blocks = self.get_anchors();
         if ! anchors_blocks.is_empty() {
             let anchors_blocks : Vec<String> = anchors_blocks.iter().map(|bid| bid.to_string()).collect();
             block.insert(PARENTS_FIELD.to_string(), Value::from(anchors_blocks));
@@ -342,7 +342,7 @@ impl Melda {
     }
 
     /// Returns the identifiers of all JSON objects
-    pub fn all_docs(&self) -> Vec<String> {
+    pub fn get_all_docs(&self) -> Vec<String> {
         self.documents
             .read()
             .unwrap()
@@ -351,7 +351,7 @@ impl Melda {
             .collect()
     }
 
-    pub fn value(&self, uuid: &str, revision: &str) -> Result<Map<String, Value>> {
+    pub fn get_value(&self, uuid: &str, revision: &str) -> Result<Map<String, Value>> {
         let revision = Revision::from(revision).expect("instatus_revision_string");
         match self.documents.read().unwrap().get(uuid) {
             Some(o) => self.data.read().unwrap().read_object(&revision, o),
@@ -567,7 +567,7 @@ impl Melda {
     }
 
     // FIXME: Reimplement using LWBlocks inside the state
-    pub fn anchors(&self) -> BTreeSet<String> {
+    pub fn get_anchors(&self) -> BTreeSet<String> {
         let blocks = self.blocks.read().unwrap();
         // Return the identifiers of all blocks which are not referenced as parents
         let mut anchors: BTreeSet<&String> = blocks.iter().map(|(k,_) | k).collect();
@@ -1081,7 +1081,7 @@ impl Melda {
         }
     }
 
-    pub fn history(&self, uuid: &String, revision: &String) -> Result<Vec<String>> {
+    pub fn get_revision_history(&self, uuid: &String, revision: &String) -> Result<Vec<String>> {
         let docs = self.documents.read().unwrap();
         let rt = docs.get(uuid).ok_or(anyhow!("unknown_document"))?;
         let revision = Revision::from(revision).expect("instatus_revision_string");
@@ -1093,7 +1093,7 @@ impl Melda {
         Ok(result)
     }
 
-    pub fn parent(&self, uuid: &String, revision: &String) -> Result<Option<String>> {
+    pub fn get_parent_revision(&self, uuid: &String, revision: &String) -> Result<Option<String>> {
         let docs = self.documents.read().unwrap();
         let rt = docs.get(uuid).ok_or(anyhow!("unknown_document"))?;
         let revision = Revision::from(revision).expect("instatus_revision_string");
