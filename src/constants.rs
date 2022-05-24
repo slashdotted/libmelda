@@ -29,7 +29,7 @@ pub const DELTA_EXTENSION: &str = r#".delta"#;
 /// Data pack index extension
 pub const INDEX_EXTENSION: &str = r#".index"#;
 /// Default root object identifier
-pub const ROOT_ID: &str = r#"\u{221A}"#;
+pub const ROOT_ID: &str = "\u{221A}";
 /// Parents field key (inside delta blocks)
 pub const PARENTS_FIELD: &str = r#"p"#;
 /// Changesets field key (inside delta blocks and stages)
