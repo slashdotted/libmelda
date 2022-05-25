@@ -521,7 +521,11 @@ impl DataStorage {
         revision: &Revision,
         rt: &RevisionTree,
     ) -> Result<Map<String, Value>> {
-        if revision.digest.len() <= 8 && u32::from_str_radix(&revision.digest, 16).is_ok() {
+        if revision.is_deleted() {
+            Ok(json!({"_deleted":true}).as_object().unwrap().clone())
+        } else if revision.is_resolved() {
+            Ok(json!({"_resolved":true}).as_object().unwrap().clone())
+        } else if revision.digest.len() <= 8 && u32::from_str_radix(&revision.digest, 16).is_ok() {
             let mut o = Map::<String, Value>::new();
             o.insert(HASH_FIELD.to_string(), Value::from(revision.digest.clone()));
             Ok(o)

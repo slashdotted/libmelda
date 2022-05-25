@@ -73,8 +73,10 @@ impl Melda {
     /// # Example
     /// ```
     /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
-    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new().expect("cannot_initialize_adapter"));
-    /// let mut replica = Melda::new(Arc::new(RwLock::new(fadapter))).expect("cannot_initialize_crdt"); 
+    /// use std::sync::{Arc, Mutex, RwLock};
+    /// use serde_json::{Map, Value,json};
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let mut replica = Melda::new(Arc::new(RwLock::new(adapter))).expect("cannot_initialize_crdt");
     /// ```
     pub fn new(adapter: Arc<RwLock<Box<dyn Adapter>>>) -> Result<Melda> {
         let mut dc = Melda {
@@ -97,8 +99,10 @@ impl Melda {
     /// # Example
     /// ```
     /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
-    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new().expect("cannot_initialize_adapter"));
-    /// let mut replica = Melda::new(Arc::new(RwLock::new(fadapter, "fefefefefefefefef"))).expect("cannot_initialize_crdt"); 
+    /// use std::sync::{Arc, Mutex, RwLock};
+    /// use serde_json::{Map, Value,json};
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let mut replica = Melda::new_until(Arc::new(RwLock::new(adapter)), "someblockid").expect("cannot_initialize_crdt");
     /// ```
     pub fn new_until(adapter: Arc<RwLock<Box<dyn Adapter>>>, block: &str) -> Result<Melda> {
         let mut dc = Melda {
@@ -121,12 +125,14 @@ impl Melda {
     /// # Example
     /// ```
     /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
-    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new().expect("cannot_initialize_adapter"));
-    /// let mut replica = Melda::new(Arc::new(RwLock::new(fadapter))).expect("cannot_initialize_crdt");
+    /// use std::sync::{Arc, Mutex, RwLock};
+    /// use serde_json::{Map, Value,json};
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let mut replica = Melda::new(Arc::new(RwLock::new(adapter))).expect("cannot_initialize_crdt");
     /// let object = json!({ "somekey" : [ "somedata", 1, 2, 3, 4 ] }).as_object().unwrap().clone();
-    /// replica.create_object("myobject", object);
+    /// assert!(replica.create_object("myobject", object).is_ok())
     /// ```
-    pub fn create_object(&mut self, uuid: String, obj: Map<String, Value>) -> Result<()> {
+    pub fn create_object(&mut self, uuid: &str, obj: Map<String, Value>) -> Result<()> {
         let mut rt = RevisionTree::new();
         let rev = Revision::new(1u32, digest_object(&obj)?, None);
         let mut data = self.data.write().expect("cannot_acquire_data_for_writing");
@@ -136,7 +142,7 @@ impl Melda {
             .documents
             .write()
             .expect("cannot_acquire_documents_for_writing")
-            .insert(uuid.clone(), rt)
+            .insert(uuid.to_string(), rt)
             .is_some()
         {
             bail!("duplicate_revision_tree");
@@ -144,7 +150,7 @@ impl Melda {
         self.stage
             .write()
             .expect("cannot_acquire_stage_for_writing")
-            .push(Change(uuid, rev, None));
+            .push(Change(uuid.to_string(), rev, None));
         Ok(())
     }
 
@@ -158,19 +164,26 @@ impl Melda {
     /// # Example
     /// ```
     /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
-    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new().expect("cannot_initialize_adapter"));
-    /// let mut replica = Melda::new(Arc::new(RwLock::new(fadapter))).expect("cannot_initialize_crdt");
+    /// use std::sync::{Arc, Mutex, RwLock};
+    /// use serde_json::{Map, Value,json};
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let mut replica = Melda::new(Arc::new(RwLock::new(adapter))).expect("cannot_initialize_crdt");
     /// let object = json!({ "somekey" : [ "somedata", 1, 2, 3, 4 ] }).as_object().unwrap().clone();
-    /// replica.create_object("myobject", object);     
+    /// assert!(replica.create_object("myobject", object).is_ok());    
     /// let object = json!({ "somekey" : [ "somedata", 1, 2, 3, 4 ], "otherkey" : "otherdata" }).as_object().unwrap().clone();
-    /// replica.update_object("myobject", object);
+    /// assert!(replica.update_object("myobject", object).is_ok());
     /// ```
-    pub fn update_object(&mut self, uuid: String, obj: Map<String, Value>) -> Result<()> {
+    pub fn update_object(&mut self, uuid: &str, obj: Map<String, Value>) -> Result<()> {
         let docs_r = self.documents.read().expect("cannot_acquire_documents_for_reading");
-        match docs_r.get(&uuid) {
+        match docs_r.get(uuid) {
             Some(rt) => {
                 let digest = digest_object(&obj)?; // Digest of the "full" object
                 let w = rt.get_winner().unwrap().clone(); // Winning revision
+                if w.is_deleted() {
+                    bail!("cannot_update_deleted_revision");
+                } else if w.is_resolved() {
+                    bail!("cannot_update_resolved_revision");
+                }
                 if digest.ne(&w.digest) {
                     // The w.digest corresponds to the "full" object
                     let data_r = self.data.read().expect("cannot_acquire_data_for_reading");
@@ -185,17 +198,17 @@ impl Melda {
                                 Some(&w),
                             );
                             drop(docs_r);
+                            drop(data_r);
                             self.documents
                                 .write()
                                 .unwrap()
-                                .get_mut(&uuid)
+                                .get_mut(uuid)
                                 .unwrap()
                                 .add(rev.clone(), Some(w.clone()));
-                            drop(data_r);
                             let mut data_w = self.data.write().expect("cannot_acquire_data_for_writing");
                             data_w.write_object(&rev, obj, Some(delta))?;
                             self.stage.write().expect("cannot_acquire_stage_for_writing").push(Change(
-                                uuid,
+                                uuid.to_string(),
                                 rev,
                                 Some(w),
                             ));
@@ -203,14 +216,15 @@ impl Melda {
                         None => {
                             // There were no delta fields or the object should not be "delta-ed"
                             let rev = Revision::new(w.index + 1, digest, Some(&w));
+                            drop(docs_r);
                             let mut docs_w = self.documents.write().expect("cannot_acquire_documents_for_writing");
-                            let rt = docs_w.get_mut(&uuid).unwrap();
+                            let rt = docs_w.get_mut(uuid).unwrap();
                             rt.add(rev.clone(), Some(w.clone()));
                             drop(data_r);
                             let mut data_w = self.data.write().expect("cannot_acquire_data_for_writing");
                             data_w.write_object(&rev, obj, None)?;
                             self.stage.write().expect("cannot_acquire_stage_for_writing").push(Change(
-                                uuid,
+                                uuid.to_string(),
                                 rev,
                                 Some(w),
                             ));
@@ -235,13 +249,21 @@ impl Melda {
     /// # Example
     /// ```
     /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
-    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new().expect("cannot_initialize_adapter"));
-    /// let mut replica = Melda::new(Arc::new(RwLock::new(fadapter))).expect("cannot_initialize_crdt");
+    /// use std::sync::{Arc, Mutex, RwLock};
+    /// use serde_json::{Map, Value,json};
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let mut replica = Melda::new(Arc::new(RwLock::new(adapter))).expect("cannot_initialize_crdt");
     /// let object = json!({ "somekey" : [ "somedata", 1, 2, 3, 4 ] }).as_object().unwrap().clone();
-    /// replica.create_object("myobject", object);    
+    /// replica.create_object("myobject", object);
+    /// assert!(replica.get_all_docs().contains("myobject"));    
     /// replica.delete_object("myobject");
+    /// assert!(replica.get_all_docs().contains("myobject"));
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// let value = replica.get_value("myobject", &winner);
+    /// assert!(value.is_ok());
+    /// assert!(value.unwrap().contains_key("_deleted"));
     /// ```
-    pub fn delete_object(&mut self, uuid: &String) -> Result<()> {
+    pub fn delete_object(&mut self, uuid: &str) -> Result<()> {
         match self.documents.write().unwrap().get_mut(uuid) {
             Some(rt) => {
                 let w = rt.get_winner().unwrap().clone();
@@ -249,7 +271,7 @@ impl Melda {
                     let rev = Revision::new_deleted(&w);
                     rt.add(rev.clone(), Some(w.clone()));
                     self.stage.write().unwrap().push(Change(
-                        uuid.clone(),
+                        uuid.to_string(),
                         rev,
                         Some(w),
                     ));
@@ -269,12 +291,21 @@ impl Melda {
     /// # Example
     /// ```
     /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
-    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new().expect("cannot_initialize_adapter"));
-    /// let mut replica = Melda::new(Arc::new(RwLock::new(fadapter))).expect("cannot_initialize_crdt");
-    /// let object = json!({ "somekey" : [ "somedata", 1, 2, 3, 4 ] }).as_object().unwrap().clone();
-    /// replica.create_object("myobject", object);    
+    /// use std::sync::{Arc, Mutex, RwLock};
+    /// use serde_json::{Map, Value,json};
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let mut replica = Melda::new(Arc::new(RwLock::new(adapter))).expect("cannot_initialize_crdt");
+    /// let object = json!({ "somekey" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
+    /// replica.create_object("myobject", object);  
+    /// assert!(replica.get_all_docs().contains("myobject"));  
     /// replica.commit(None);
     /// replica.delete_object("myobject");
+    /// assert!(replica.get_all_docs().contains("myobject"));
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// assert_eq!("2-d_e5d1d20", winner); 
+    /// let value = replica.get_value("myobject", &winner);
+    /// assert!(value.is_ok());
+    /// assert!(value.unwrap().contains_key("_deleted")); 
     /// let info = json!({ "author" : "Some user", "date" : "2022-05-23 13:47:00CET" }).as_object().unwrap().clone();
     /// replica.commit(Some(info));
     /// ```
@@ -341,8 +372,23 @@ impl Melda {
         Ok(Some(blockid))
     }
 
-    /// Returns the identifiers of all JSON objects
-    pub fn get_all_docs(&self) -> Vec<String> {
+    /// Returns a set of the identifier of all objects
+    ///
+    /// # Example
+    /// ```
+    /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
+    /// use std::sync::{Arc, Mutex, RwLock};
+    /// use serde_json::{Map, Value,json};
+    /// use std::collections::BTreeSet;
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let mut replica = Melda::new(Arc::new(RwLock::new(adapter))).expect("cannot_initialize_crdt");
+    /// let object = json!({ "somekey" : [ "somedata", 1.0f32, 2.0f32, 3.0f32, 4.0f32 ] }).as_object().unwrap().clone();
+    /// replica.create_object("myobject", object);
+    /// let object = json!({ "somekey" : [ "somedata", 1.0f32, 2.0f32, 3.0f32, 4.0f32 ] }).as_object().unwrap().clone();
+    /// replica.create_object("another", object);
+    /// assert_eq!(replica.get_all_docs(), BTreeSet::from(["another".to_string(),"myobject".to_string()]));
+    /// ```
+    pub fn get_all_docs(&self) -> BTreeSet<String> {
         self.documents
             .read()
             .unwrap()
@@ -355,7 +401,7 @@ impl Melda {
         let revision = Revision::from(revision).expect("instatus_revision_string");
         match self.documents.read().unwrap().get(uuid) {
             Some(o) => self.data.read().unwrap().read_object(&revision, o),
-            None => Err(anyhow!("instatus object uuid")),
+            None => Err(anyhow!("invalid object uuid")),
         }
     }
 
@@ -983,7 +1029,7 @@ impl Melda {
     }
 
     /// Returns the winning revision for the given object
-    pub fn winner<T>(&self, uuid: T) -> Result<String>
+    pub fn get_winner<T>(&self, uuid: T) -> Result<String>
     where
         T: AsRef<str>,
     {
@@ -1016,11 +1062,11 @@ impl Melda {
 
     /// Resolves a conflict by choosing the new winning revision
     /// All other conflicting revisions will be marked as resolved
-    pub fn resolve_as(&mut self, uuid: String, winner: &String) -> Result<()> {
+    pub fn resolve_as(&mut self, uuid: &str, winner: &str) -> Result<()> {
         {
             let winner = Revision::from(winner).expect("instatus_revision_string");
             let docs = self.documents.read().unwrap();
-            let rt = docs.get(&uuid).ok_or(anyhow!("unknown_document"))?;
+            let rt = docs.get(uuid).ok_or(anyhow!("unknown_document"))?;
             let leafs = rt.get_leafs();
             // We can only resolve to a status revision
             if !leafs.contains(&winner) {
@@ -1037,14 +1083,14 @@ impl Melda {
             drop(leafs);
             drop(rt);
             drop(docs);
-            self.update_object(uuid.clone(), merged)?;
+            self.update_object(uuid, merged)?;
         }
         let docs = self.documents.read().unwrap();
-        let rt = docs.get(&uuid).ok_or(anyhow!("unknown_document"))?;
+        let rt = docs.get(uuid).ok_or(anyhow!("unknown_document"))?;
         let winner = rt.get_winner().expect("revision_tree_instatus_state").clone();
         // Seal all other revisions as resolved
         let mut docs = self.documents.write().unwrap();
-        let rt = docs.get_mut(&uuid).ok_or(anyhow!("unknown_document"))?;
+        let rt = docs.get_mut(uuid).ok_or(anyhow!("unknown_document"))?;
         let leafs: Vec<Revision> = rt.get_leafs().iter().map(|r| (*r).clone()).collect();
         for r in leafs {
             if r != winner {
