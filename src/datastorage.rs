@@ -13,7 +13,6 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
-use std::collections::BTreeSet;
 use crate::adapter::Adapter;
 use crate::constants::{DELTA_PREFIX, HASH_FIELD, INDEX_EXTENSION, PACK_EXTENSION};
 use crate::revision::Revision;
@@ -27,6 +26,7 @@ use serde_json::json;
 use serde_json::Map;
 use serde_json::Value;
 use std::cell::RefCell;
+use std::collections::BTreeSet;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -153,7 +153,7 @@ impl DataStorage {
     /// Reloads the storage
     /// TODO: This can be partially replaced by a call to refresh
     pub fn reload(&mut self) -> Result<Vec<String>> {
-        if ! self.stage.is_empty() {
+        if !self.stage.is_empty() {
             bail!("non_empty_data_stage");
         }
         self.loaded_packs.clear();
@@ -219,7 +219,7 @@ impl DataStorage {
 
     pub fn replicate(&mut self, other: &DataStorage) -> Result<()> {
         for p in &other.loaded_packs {
-            if ! self.loaded_packs.contains(p) {
+            if !self.loaded_packs.contains(p) {
                 let rawdata = self.read_raw_object(&p, 0, 0)?;
                 self.write_raw_object(p, &rawdata)?;
             }
@@ -694,7 +694,7 @@ impl DataStorage {
         if s.is_object() {
             let s = s.as_object().unwrap();
             for (digest, v) in s {
-                if ! self.objects.contains_key(digest) {
+                if !self.objects.contains_key(digest) {
                     self.stage.insert(digest.clone(), v.clone());
                 }
             }

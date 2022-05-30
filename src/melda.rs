@@ -28,9 +28,11 @@ use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, RwLock};
 
+/// Change triple (used for storing block changesets)
 #[derive(PartialEq, Clone)]
-pub struct Change(String, Revision, Option<Revision>);
+struct Change(String, Revision, Option<Revision>);
 
+/// Melda is a Delta-State CRDT for arbitrary JSON documents.
 pub struct Melda {
     documents: RwLock<BTreeMap<String, RevisionTree>>,
     data: RwLock<DataStorage>,
@@ -40,14 +42,13 @@ pub struct Melda {
 
 #[derive(PartialEq, Copy, Clone, Debug)]
 
-pub enum Status {
+/// Status of a cblock
+enum Status {
     Unknown,
     Valid,
     ValidAndApplied, // For valid and applied blocks, changes is None
     Invalid,
 }
-
-// FIXME: What if we keep all blocks in memory and then reference (bid,change_idx) inside revision trees?
 
 /// Block is a public structure representing a block. It is used to represent a block that has been correctly parsed.
 
@@ -57,8 +58,8 @@ pub struct Block {
     pub parents: Option<Vec<String>>,
     pub info: Option<Map<String, Value>>,
     pub packs: Option<Vec<String>>,
-    pub changes: Option<Vec<Change>>,
-    pub status: Status,
+    changes: Option<Vec<Change>>,
+    status: Status,
 }
 
 impl Melda {
@@ -660,9 +661,7 @@ impl Melda {
                 .expect("cannot_acquire_block_for_reading")
                 .status;
             if status == Status::Valid {
-                if let Ok(_) =
-                    self.apply_block(&block.read().expect("cannot_acquire_block_for_reading"))
-                {
+                if let Ok(_) = self.apply_block(&block_r) {
                     drop(block_r);
                     let mut block_w = block.write().expect("cannot_acquire_block_for_writing");
                     block_w.status = Status::ValidAndApplied;
@@ -834,7 +833,34 @@ impl Melda {
         Ok(())
     }
 
-    /// Merges from another data structure
+    /// Merges changes from another Melda into this one (does not stage changes)
+    ///
+    /// # Arguments
+    ///
+    /// * `other` - Another Melda instance
+    ///
+    /// # Example
+    /// ```
+    /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
+    /// use std::sync::{Arc, Mutex, RwLock};
+    /// use serde_json::{Map, Value,json};
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let adapter = Arc::new(RwLock::new(adapter));
+    /// let mut replica = Melda::new(adapter.clone()).expect("cannot_initialize_crdt");
+    /// let object = json!({ "somekey" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
+    /// replica.create_object("myobject", object);  
+    /// assert!(replica.get_all_objects().contains("myobject"));
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
+    /// let block_id = replica.commit(None).unwrap().unwrap();
+    /// let adapter2 : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let adapter2 = Arc::new(RwLock::new(adapter2));
+    /// let mut replica2 = Melda::new(adapter2.clone()).expect("cannot_initialize_crdt");
+    /// replica2.merge(&replica);
+    /// assert!(replica2.get_all_objects().contains("myobject"));
+    /// let winner = replica2.get_winner("myobject").unwrap();
+    /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
+    /// assert!(replica2.get_block(&block_id).unwrap().is_none());
     pub fn merge(&mut self, other: &Melda) -> Result<()> {
         for (uuid, rt) in other.documents.read().unwrap().iter() {
             if !self.documents.read().unwrap().contains_key(uuid) {
@@ -850,7 +876,36 @@ impl Melda {
         data.merge(otherdata)
     }
 
-    /// Melds the data structure into another data structure
+    /// Melds another Melda into this one
+    ///
+    /// # Arguments
+    ///
+    /// * `other` - Another Melda instance
+    ///
+    /// # Example
+    /// ```
+    /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
+    /// use std::sync::{Arc, Mutex, RwLock};
+    /// use serde_json::{Map, Value,json};
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let adapter = Arc::new(RwLock::new(adapter));
+    /// let mut replica = Melda::new(adapter.clone()).expect("cannot_initialize_crdt");
+    /// let object = json!({ "somekey" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
+    /// replica.create_object("myobject", object);  
+    /// assert!(replica.get_all_objects().contains("myobject"));
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
+    /// let block_id = replica.commit(None).unwrap().unwrap();
+    /// let adapter2 : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let adapter2 = Arc::new(RwLock::new(adapter2));
+    /// let mut replica2 = Melda::new(adapter2.clone()).expect("cannot_initialize_crdt");
+    /// replica2.meld(&replica);
+    /// replica2.refresh();
+    /// assert!(replica2.get_all_objects().contains("myobject"));
+    /// let winner = replica2.get_winner("myobject").unwrap();
+    /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
+    /// let block = replica2.get_block(&block_id).unwrap().unwrap();
+    /// assert_eq!(block_id, block.id);
     pub fn meld(&mut self, other: &Melda) -> Result<Vec<String>> {
         let mut result = vec![];
         let other_data = other.data.read().unwrap();
@@ -869,6 +924,34 @@ impl Melda {
         Ok(result)
     }
 
+    /// Replicate changes from another Melda into this one
+    ///
+    /// # Arguments
+    ///
+    /// * `other` - Another Melda instance
+    ///
+    /// # Example
+    /// ```
+    /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
+    /// use std::sync::{Arc, Mutex, RwLock};
+    /// use serde_json::{Map, Value,json};
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let adapter = Arc::new(RwLock::new(adapter));
+    /// let mut replica = Melda::new(adapter.clone()).expect("cannot_initialize_crdt");
+    /// let object = json!({ "somekey" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
+    /// replica.create_object("myobject", object);  
+    /// assert!(replica.get_all_objects().contains("myobject"));
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
+    /// let block_id = replica.commit(None).unwrap().unwrap();
+    /// let adapter2 : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let adapter2 = Arc::new(RwLock::new(adapter2));
+    /// let mut replica2 = Melda::new(adapter2.clone()).expect("cannot_initialize_crdt");
+    /// replica2.replicate(&replica);
+    /// assert!(replica2.get_all_objects().contains("myobject"));
+    /// let winner = replica2.get_winner("myobject").unwrap();
+    /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
+    /// assert!(replica2.get_block(&block_id).unwrap().is_none());
     pub fn replicate(&mut self, other: &Melda) -> Result<()> {
         let other_data = other.data.read().unwrap();
         let other_documents = other.documents.read().unwrap();
@@ -914,8 +997,21 @@ impl Melda {
         Ok(())
     }
 
-    /// Reads the current state of the data structure and returns the resulting object
-    pub fn read(&self) -> Result<Value> {
+    /// Reads the data structure and unflattens to a JSON object
+    ///
+    /// # Example
+    /// ```
+    /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
+    /// use std::sync::{Arc, Mutex, RwLock};
+    /// use serde_json::{Map, Value,json};
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let adapter = Arc::new(RwLock::new(adapter));
+    /// let mut replica = Melda::new(adapter.clone()).expect("cannot_initialize_crdt");
+    /// let object = json!({ "somekey" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
+    /// replica.update(object.clone());
+    /// let readback = replica.read().unwrap();
+    /// assert!(readback.contains_key("somekey"));
+    pub fn read(&self) -> Result<Map<String, Value>> {
         if !self.documents.read().unwrap().contains_key(ROOT_ID) {
             bail!("no_root")
         } else {
@@ -935,13 +1031,33 @@ impl Melda {
             let c_r = c.lock().unwrap();
             let root = c_r.get(ROOT_ID).expect("root_object_not_found");
             let root = Value::from(root.clone());
-            let result = Value::from(unflatten(&c_r, &root).unwrap().clone());
+            let result = Value::from(unflatten(&c_r, &root).unwrap().clone())
+                .as_object()
+                .expect("not_an_object")
+                .clone();
             drop(c_r);
             Ok(result)
         }
     }
 
-    /// Update the data structure by processing the input object
+    /// Updates the data structure by flattening the input JSON object
+    ///
+    /// # Arguments
+    ///
+    /// * `obj` - input JSON object
+    ///
+    /// # Example
+    /// ```
+    /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
+    /// use std::sync::{Arc, Mutex, RwLock};
+    /// use serde_json::{Map, Value,json};
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let adapter = Arc::new(RwLock::new(adapter));
+    /// let mut replica = Melda::new(adapter.clone()).expect("cannot_initialize_crdt");
+    /// let object = json!({ "somekey" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
+    /// replica.update(object.clone());
+    /// let readback = replica.read().unwrap();
+    /// assert!(readback.contains_key("somekey"));
     pub fn update(&mut self, obj: Map<String, Value>) -> Result<()> {
         let mut c = HashMap::<String, Map<String, Value>>::new();
         let path = Vec::<String>::new();
@@ -1038,20 +1154,44 @@ impl Melda {
         Ok(())
     }
 
-    /// Returns the identifiers of all objects with ongoing conflicts
-    pub fn in_conflict(&self) -> Vec<String> {
-        let mut result = vec![];
+    /// Returns a set of the object (identifiers) which have ongoing conflicts
+    ///
+    /// # Example
+    /// ```
+    /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
+    /// use std::sync::{Arc, Mutex, RwLock};
+    /// use serde_json::{Map, Value,json};
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let adapter = Arc::new(RwLock::new(adapter));
+    /// let mut replica = Melda::new(adapter.clone()).expect("cannot_initialize_crdt");
+    /// let object = json!({ "somekey" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
+    /// replica.create_object("myobject", object);  
+    /// assert!(replica.get_all_objects().contains("myobject"));
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
+    /// let block_id = replica.commit(None).unwrap().unwrap();
+    /// let adapter2 : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let adapter2 = Arc::new(RwLock::new(adapter2));
+    /// let mut replica2 = Melda::new(adapter2.clone()).expect("cannot_initialize_crdt");
+    /// let object = json!({ "another" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
+    /// replica2.create_object("myobject", object);  
+    /// replica2.meld(&replica);
+    /// replica2.refresh();
+    /// let conflicting = replica2.in_conflict();
+    /// assert!(conflicting.contains("myobject"));
+    pub fn in_conflict(&self) -> BTreeSet<String> {
+        let mut result = BTreeSet::new();
         self.documents.read().unwrap().iter().for_each(|(d, rt)| {
             let l = rt.get_leafs();
             if l.len() > 1 {
-                result.push(d.clone());
+                result.insert(d.clone());
             }
         });
         result
     }
 
     /// Returns the winning revision for the given object
-    /// 
+    ///
     /// # Arguments
     ///
     /// * `uuid` - The uuid of the object
@@ -1094,8 +1234,39 @@ impl Melda {
         }
     }
 
-    /// Returns the conflicting revisions for the given object
-    pub fn get_conflicting<T>(&self, uuid: T) -> Result<Vec<String>>
+    /// Returns a set of the conflicting revisions of the given object (the winning revision is not included!)
+    ///
+    /// # Arguments
+    ///
+    /// * `uuid` - The uuid of the object
+    ///
+    /// # Example
+    /// ```
+    /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
+    /// use std::sync::{Arc, Mutex, RwLock};
+    /// use serde_json::{Map, Value,json};
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let adapter = Arc::new(RwLock::new(adapter));
+    /// let mut replica = Melda::new(adapter.clone()).expect("cannot_initialize_crdt");
+    /// let object = json!({ "somekey" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
+    /// replica.create_object("myobject", object);  
+    /// assert!(replica.get_all_objects().contains("myobject"));
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
+    /// let block_id = replica.commit(None).unwrap().unwrap();
+    /// let adapter2 : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let adapter2 = Arc::new(RwLock::new(adapter2));
+    /// let mut replica2 = Melda::new(adapter2.clone()).expect("cannot_initialize_crdt");
+    /// let object = json!({ "another" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
+    /// replica2.create_object("myobject", object);
+    /// let winner2 = replica2.get_winner("myobject").unwrap();
+    /// replica2.meld(&replica);
+    /// replica2.refresh();
+    /// let conflicting = replica2.in_conflict();
+    /// assert!(conflicting.contains("myobject"));
+    /// let revs = replica2.get_conflicting("myobject").unwrap();
+    /// assert!(revs.contains(&winner2));
+    pub fn get_conflicting<T>(&self, uuid: T) -> Result<BTreeSet<String>>
     where
         T: AsRef<str>,
     {
@@ -1112,13 +1283,48 @@ impl Melda {
         }
     }
 
-    /// Resolves a conflict by choosing the new winning revision
-    /// All other conflicting revisions will be marked as resolved
+    /// Resolves a conflict by choosing the new winning revision. All other conflicting revisions are marked as resolved.
+    ///
+    /// # Arguments
+    ///
+    /// * `uuid` - The uuid of the object
+    /// * `winner` - The revision that is to be made the winner
+    ///
+    /// # Example
+    /// ```
+    /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
+    /// use std::sync::{Arc, Mutex, RwLock};
+    /// use serde_json::{Map, Value,json};
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let adapter = Arc::new(RwLock::new(adapter));
+    /// let mut replica = Melda::new(adapter.clone()).expect("cannot_initialize_crdt");
+    /// let object = json!({ "somekey" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
+    /// replica.create_object("myobject", object);  
+    /// assert!(replica.get_all_objects().contains("myobject"));
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
+    /// let block_id = replica.commit(None).unwrap().unwrap();
+    /// let adapter2 : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let adapter2 = Arc::new(RwLock::new(adapter2));
+    /// let mut replica2 = Melda::new(adapter2.clone()).expect("cannot_initialize_crdt");
+    /// let object = json!({ "another" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
+    /// replica2.create_object("myobject", object);
+    /// let winner2 = replica2.get_winner("myobject").unwrap();
+    /// assert_eq!("1-255cc6219e48f526c04bc5af86439c34e4fe39fcdc611758ff833a2ff80583f0", winner2);
+    /// replica2.meld(&replica);
+    /// replica2.refresh();
+    /// let conflicting = replica2.in_conflict();
+    /// assert!(conflicting.contains("myobject"));
+    /// let revs = replica2.get_conflicting("myobject").unwrap();
+    /// assert!(revs.contains(&winner2));
+    /// replica2.resolve_as("myobject", &winner2);
+    /// let winner = replica2.get_winner("myobject").unwrap();
+    /// assert_eq!("2-255cc6219e48f526c04bc5af86439c34e4fe39fcdc611758ff833a2ff80583f0_e5d1d20", winner);
     pub fn resolve_as(&mut self, uuid: &str, winner: &str) -> Result<()> {
         {
             let winner = Revision::from(winner).expect("instatus_revision_string");
-            let docs = self.documents.read().unwrap();
-            let rt = docs.get(uuid).ok_or(anyhow!("unknown_document"))?;
+            let docs_r = self.documents.read().unwrap();
+            let rt = docs_r.get(uuid).ok_or(anyhow!("unknown_document"))?;
             let leafs = rt.get_leafs();
             // We can only resolve to a status revision
             if !leafs.contains(&winner) {
@@ -1129,23 +1335,24 @@ impl Melda {
                 return Ok(());
             }
             // Update the winner to ensure that we do not change the view
-            let data = self.data.read().unwrap();
-            let merged = data.read_object(&winner, rt)?;
-            drop(data);
+            let data_r = self.data.read().unwrap();
+            let merged = data_r.read_object(&winner, rt)?;
+            drop(data_r);
             drop(leafs);
             drop(rt);
-            drop(docs);
+            drop(docs_r);
             self.update_object(uuid, merged)?;
         }
-        let docs = self.documents.read().unwrap();
-        let rt = docs.get(uuid).ok_or(anyhow!("unknown_document"))?;
+        let docs_r = self.documents.read().unwrap();
+        let rt = docs_r.get(uuid).ok_or(anyhow!("unknown_document"))?;
         let winner = rt
             .get_winner()
             .expect("revision_tree_instatus_state")
             .clone();
+        drop(docs_r);
         // Seal all other revisions as resolved
-        let mut docs = self.documents.write().unwrap();
-        let rt = docs.get_mut(uuid).ok_or(anyhow!("unknown_document"))?;
+        let mut docs_w = self.documents.write().unwrap();
+        let rt = docs_w.get_mut(uuid).ok_or(anyhow!("unknown_document"))?;
         let leafs: Vec<Revision> = rt.get_leafs().iter().map(|r| (*r).clone()).collect();
         for r in leafs {
             if r != winner {
@@ -1156,14 +1363,37 @@ impl Melda {
         Ok(())
     }
 
-   /* pub fn debug(&self) {
-        let docs = self.documents.read().unwrap();
-        for (docid, rt) in docs.iter() {
-            eprintln!("{}", docid);
-            rt.debug();
-        }
-    }*/
-
+    /// Saves the current stage
+    ///
+    /// # Example
+    /// ```
+    /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
+    /// use std::sync::{Arc, Mutex, RwLock};
+    /// use serde_json::{Map, Value,json};
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let adapter = Arc::new(RwLock::new(adapter));
+    /// let mut replica = Melda::new(adapter.clone()).expect("cannot_initialize_crdt");
+    /// let object = json!({ "somekey" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
+    /// replica.create_object("myobject", object);  
+    /// assert!(replica.get_all_objects().contains("myobject"));
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
+    /// let block_id = replica.commit(None).unwrap().unwrap();
+    /// replica.delete_object("myobject");
+    /// assert!(replica.get_all_objects().contains("myobject"));
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// assert_eq!("2-d_e5d1d20", winner);
+    /// let value = replica.get_value("myobject", &winner);
+    /// assert!(value.is_ok());
+    /// assert!(value.unwrap().contains_key("_deleted"));
+    /// let stage = replica.stage().unwrap();
+    /// replica.unstage();
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
+    /// replica.replay_stage(&stage);
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// assert_eq!("2-d_e5d1d20", winner);
+    /// ```
     pub fn stage(&self) -> Result<Option<Value>> {
         let mut r = Map::<String, Value>::new();
         let data = self.data.read().unwrap();
@@ -1204,38 +1434,11 @@ impl Melda {
         }
     }
 
-    pub fn get_block(&self, block_id: &str) -> Result<Option<Block>> {
-        let blocks_r = self
-            .blocks
-            .read()
-            .expect("cannot_acquire_blocks_for_reading");
-        match blocks_r.get(block_id) {
-            Some(b) => {
-                let block_r = b.read().expect("cannot_acquire_block_for_reading");
-                Ok(Some(block_r.clone()))
-            }
-            None => Ok(None),
-        }
-    }
-
-   /* pub fn get_revision_history(&self, uuid: &str, revision: &str) -> Result<Vec<String>> {
-        let docs = self.documents.read().unwrap();
-        let rt = docs.get(uuid).ok_or(anyhow!("unknown_document"))?;
-        let revision = Revision::from(revision).expect("instatus_revision_string");
-        let result: Vec<String> = rt
-            .get_full_path(&revision)
-            .into_iter()
-            .map(|x| x.to_string())
-            .collect();
-        Ok(result)
-    }*/
-
-    /// Returns the parent revision in the revision tree of the specified object, or None if there is no parent
+    /// Replays a stage
     ///
     /// # Arguments
     ///
-    /// * `uuid` - Object identifier
-    /// * `revision` - The revision
+    /// * `s` - The stage to be replayed
     ///
     /// # Example
     /// ```
@@ -1247,25 +1450,25 @@ impl Melda {
     /// let mut replica = Melda::new(adapter.clone()).expect("cannot_initialize_crdt");
     /// let object = json!({ "somekey" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
     /// replica.create_object("myobject", object);  
+    /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner = replica.get_winner("myobject").unwrap();
-    /// let parent = replica.get_parent_revision("myobject", &winner).unwrap();
-    /// assert!(parent.is_none());
+    /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
     /// let block_id = replica.commit(None).unwrap().unwrap();
     /// replica.delete_object("myobject");
-    /// let newrev = replica.get_winner("myobject").unwrap();
-    /// assert_eq!("2-d_e5d1d20", newrev);
-    /// let parent = replica.get_parent_revision("myobject", &newrev).unwrap().unwrap();
-    /// assert_eq!(&parent, &winner);
-    pub fn get_parent_revision(&self, uuid: &str, revision: &str) -> Result<Option<String>> {
-        let docs = self.documents.read().unwrap();
-        let rt = docs.get(uuid).ok_or(anyhow!("unknown_document"))?;
-        let revision = Revision::from(revision).expect("instatus_revision_string");
-        match rt.get_parent(&revision) {
-            Some(r) => Ok(Some(r.to_string())),
-            None => Ok(None),
-        }
-    }
-
+    /// assert!(replica.get_all_objects().contains("myobject"));
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// assert_eq!("2-d_e5d1d20", winner);
+    /// let value = replica.get_value("myobject", &winner);
+    /// assert!(value.is_ok());
+    /// assert!(value.unwrap().contains_key("_deleted"));
+    /// let stage = replica.stage().unwrap();
+    /// replica.unstage();
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
+    /// replica.replay_stage(&stage);
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// assert_eq!("2-d_e5d1d20", winner);
+    /// ```
     pub fn replay_stage(&mut self, s: &Option<Value>) -> Result<()> {
         if let Some(s) = s {
             if s.is_object() {
@@ -1414,6 +1617,78 @@ impl Melda {
             }
         } else {
             Ok(())
+        }
+    }
+
+    /// Returns a block, or None if the block does not exist.
+    ///
+    /// # Arguments
+    ///
+    /// * `block_id` - Block identifier
+    ///
+    /// # Example
+    /// ```
+    /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
+    /// use std::sync::{Arc, Mutex, RwLock};
+    /// use serde_json::{Map, Value,json};
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let adapter = Arc::new(RwLock::new(adapter));
+    /// let mut replica = Melda::new(adapter.clone()).expect("cannot_initialize_crdt");
+    /// let object = json!({ "somekey" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
+    /// replica.create_object("myobject", object);  
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// let parent = replica.get_parent_revision("myobject", &winner).unwrap();
+    /// assert!(parent.is_none());
+    /// let block_id = replica.commit(None).unwrap().unwrap();
+    /// let block = replica.get_block(&block_id).unwrap().unwrap();
+    /// assert_eq!(block_id, block.id);
+    pub fn get_block(&self, block_id: &str) -> Result<Option<Block>> {
+        let blocks_r = self
+            .blocks
+            .read()
+            .expect("cannot_acquire_blocks_for_reading");
+        match blocks_r.get(block_id) {
+            Some(b) => {
+                let block_r = b.read().expect("cannot_acquire_block_for_reading");
+                Ok(Some(block_r.clone()))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Returns the parent revision in the revision tree of the specified object, or None if there is no parent
+    ///
+    /// # Arguments
+    ///
+    /// * `uuid` - Object identifier
+    /// * `revision` - The revision
+    ///
+    /// # Example
+    /// ```
+    /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
+    /// use std::sync::{Arc, Mutex, RwLock};
+    /// use serde_json::{Map, Value,json};
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let adapter = Arc::new(RwLock::new(adapter));
+    /// let mut replica = Melda::new(adapter.clone()).expect("cannot_initialize_crdt");
+    /// let object = json!({ "somekey" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
+    /// replica.create_object("myobject", object);  
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// let parent = replica.get_parent_revision("myobject", &winner).unwrap();
+    /// assert!(parent.is_none());
+    /// let block_id = replica.commit(None).unwrap().unwrap();
+    /// replica.delete_object("myobject");
+    /// let newrev = replica.get_winner("myobject").unwrap();
+    /// assert_eq!("2-d_e5d1d20", newrev);
+    /// let parent = replica.get_parent_revision("myobject", &newrev).unwrap().unwrap();
+    /// assert_eq!(&parent, &winner);
+    pub fn get_parent_revision(&self, uuid: &str, revision: &str) -> Result<Option<String>> {
+        let docs = self.documents.read().unwrap();
+        let rt = docs.get(uuid).ok_or(anyhow!("unknown_document"))?;
+        let revision = Revision::from(revision).expect("instatus_revision_string");
+        match rt.get_parent(&revision) {
+            Some(r) => Ok(Some(r.to_string())),
+            None => Ok(None),
         }
     }
 
