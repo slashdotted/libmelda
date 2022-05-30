@@ -1051,6 +1051,36 @@ impl Melda {
     }
 
     /// Returns the winning revision for the given object
+    /// 
+    /// # Arguments
+    ///
+    /// * `uuid` - The uuid of the object
+    ///
+    /// # Example
+    /// ```
+    /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
+    /// use std::sync::{Arc, Mutex, RwLock};
+    /// use serde_json::{Map, Value,json};
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let adapter = Arc::new(RwLock::new(adapter));
+    /// let mut replica = Melda::new(adapter.clone()).expect("cannot_initialize_crdt");
+    /// let object = json!({ "somekey" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
+    /// replica.create_object("myobject", object);  
+    /// assert!(replica.get_all_objects().contains("myobject"));
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
+    /// let block_id = replica.commit(None).unwrap().unwrap();
+    /// replica.delete_object("myobject");
+    /// assert!(replica.get_all_objects().contains("myobject"));
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// assert_eq!("2-d_e5d1d20", winner);
+    /// let value = replica.get_value("myobject", &winner);
+    /// assert!(value.is_ok());
+    /// assert!(value.unwrap().contains_key("_deleted"));
+    /// replica.unstage();
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
+    /// ```
     pub fn get_winner<T>(&self, uuid: T) -> Result<String>
     where
         T: AsRef<str>,
@@ -1126,13 +1156,13 @@ impl Melda {
         Ok(())
     }
 
-    pub fn debug(&self) {
+   /* pub fn debug(&self) {
         let docs = self.documents.read().unwrap();
         for (docid, rt) in docs.iter() {
             eprintln!("{}", docid);
             rt.debug();
         }
-    }
+    }*/
 
     pub fn stage(&self) -> Result<Option<Value>> {
         let mut r = Map::<String, Value>::new();
@@ -1188,7 +1218,7 @@ impl Melda {
         }
     }
 
-    pub fn get_revision_history(&self, uuid: &String, revision: &String) -> Result<Vec<String>> {
+   /* pub fn get_revision_history(&self, uuid: &str, revision: &str) -> Result<Vec<String>> {
         let docs = self.documents.read().unwrap();
         let rt = docs.get(uuid).ok_or(anyhow!("unknown_document"))?;
         let revision = Revision::from(revision).expect("instatus_revision_string");
@@ -1198,9 +1228,35 @@ impl Melda {
             .map(|x| x.to_string())
             .collect();
         Ok(result)
-    }
+    }*/
 
-    pub fn get_parent_revision(&self, uuid: &String, revision: &String) -> Result<Option<String>> {
+    /// Returns the parent revision in the revision tree of the specified object, or None if there is no parent
+    ///
+    /// # Arguments
+    ///
+    /// * `uuid` - Object identifier
+    /// * `revision` - The revision
+    ///
+    /// # Example
+    /// ```
+    /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
+    /// use std::sync::{Arc, Mutex, RwLock};
+    /// use serde_json::{Map, Value,json};
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let adapter = Arc::new(RwLock::new(adapter));
+    /// let mut replica = Melda::new(adapter.clone()).expect("cannot_initialize_crdt");
+    /// let object = json!({ "somekey" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
+    /// replica.create_object("myobject", object);  
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// let parent = replica.get_parent_revision("myobject", &winner).unwrap();
+    /// assert!(parent.is_none());
+    /// let block_id = replica.commit(None).unwrap().unwrap();
+    /// replica.delete_object("myobject");
+    /// let newrev = replica.get_winner("myobject").unwrap();
+    /// assert_eq!("2-d_e5d1d20", newrev);
+    /// let parent = replica.get_parent_revision("myobject", &newrev).unwrap().unwrap();
+    /// assert_eq!(&parent, &winner);
+    pub fn get_parent_revision(&self, uuid: &str, revision: &str) -> Result<Option<String>> {
         let docs = self.documents.read().unwrap();
         let rt = docs.get(uuid).ok_or(anyhow!("unknown_document"))?;
         let revision = Revision::from(revision).expect("instatus_revision_string");

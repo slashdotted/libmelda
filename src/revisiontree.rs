@@ -91,7 +91,7 @@ impl RevisionTree {
         })
     }
 
-    /// Returns the path to a revision (digest only)
+   /* /// Returns the path to a revision (digest only)
     #[allow(dead_code)]
     pub fn get_path<'a>(&'a self, revision: &'a Revision) -> Vec<&'a String> {
         let mut path = Vec::<&String>::new();
@@ -166,7 +166,7 @@ impl RevisionTree {
             }
             index += 1;
         });
-    }
+    } */
 }
 
 mod tests {
