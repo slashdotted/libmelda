@@ -104,12 +104,12 @@ impl Melda {
     /// let mut replica = Melda::new(adapter.clone()).expect("cannot_initialize_crdt");
     /// let object = json!({ "somekey" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
     /// replica.create_object("myobject", object);  
-    /// assert!(replica.get_all_docs().contains("myobject"));
+    /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner = replica.get_winner("myobject").unwrap();
     /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
     /// let block_id = replica.commit(None).unwrap().unwrap();
     /// replica.delete_object("myobject");
-    /// assert!(replica.get_all_docs().contains("myobject"));
+    /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner = replica.get_winner("myobject").unwrap();
     /// assert_eq!("2-d_e5d1d20", winner);
     /// let value = replica.get_value("myobject", &winner);
@@ -278,9 +278,9 @@ impl Melda {
     /// let mut replica = Melda::new(Arc::new(RwLock::new(adapter))).expect("cannot_initialize_crdt");
     /// let object = json!({ "somekey" : [ "somedata", 1, 2, 3, 4 ] }).as_object().unwrap().clone();
     /// replica.create_object("myobject", object);
-    /// assert!(replica.get_all_docs().contains("myobject"));    
+    /// assert!(replica.get_all_objects().contains("myobject"));    
     /// replica.delete_object("myobject");
-    /// assert!(replica.get_all_docs().contains("myobject"));
+    /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner = replica.get_winner("myobject").unwrap();
     /// let value = replica.get_value("myobject", &winner);
     /// assert!(value.is_ok());
@@ -319,10 +319,10 @@ impl Melda {
     /// let mut replica = Melda::new(Arc::new(RwLock::new(adapter))).expect("cannot_initialize_crdt");
     /// let object = json!({ "somekey" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
     /// replica.create_object("myobject", object);  
-    /// assert!(replica.get_all_docs().contains("myobject"));  
+    /// assert!(replica.get_all_objects().contains("myobject"));  
     /// replica.commit(None);
     /// replica.delete_object("myobject");
-    /// assert!(replica.get_all_docs().contains("myobject"));
+    /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner = replica.get_winner("myobject").unwrap();
     /// assert_eq!("2-d_e5d1d20", winner);
     /// let value = replica.get_value("myobject", &winner);
@@ -393,6 +393,14 @@ impl Melda {
         data.write_raw_object(&blockid, blockstr.as_bytes())?;
         // Clears the stage
         self.stage.write().unwrap().clear();
+        // Load the block
+        drop(data);
+        let mut b = self.parse_raw_block(block_hash.clone(), block).unwrap();
+        b.status = Status::ValidAndApplied;
+        self.blocks
+            .write()
+            .unwrap()
+            .insert(block_hash.clone(), RwLock::new(b));
         Ok(Some(block_hash))
     }
 
@@ -410,9 +418,9 @@ impl Melda {
     /// replica.create_object("myobject", object);
     /// let object = json!({ "somekey" : [ "somedata", 1.0f32, 2.0f32, 3.0f32, 4.0f32 ] }).as_object().unwrap().clone();
     /// replica.create_object("another", object);
-    /// assert_eq!(replica.get_all_docs(), BTreeSet::from(["another".to_string(),"myobject".to_string()]));
+    /// assert_eq!(replica.get_all_objects(), BTreeSet::from(["another".to_string(),"myobject".to_string()]));
     /// ```
-    pub fn get_all_docs(&self) -> BTreeSet<String> {
+    pub fn get_all_objects(&self) -> BTreeSet<String> {
         self.documents
             .read()
             .unwrap()
@@ -421,6 +429,27 @@ impl Melda {
             .collect()
     }
 
+    /// Returns a the value associated with the given revision
+    ///
+    /// # Arguments
+    ///
+    /// * `uuid` - The identifier of the object
+    /// * `revision`- The revision which we want to obtain the value for
+    ///
+    /// # Example
+    /// ```
+    /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
+    /// use std::sync::{Arc, Mutex, RwLock};
+    /// use serde_json::{Map, Value,json};
+    /// use std::collections::BTreeSet;
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let mut replica = Melda::new(Arc::new(RwLock::new(adapter))).expect("cannot_initialize_crdt");
+    /// let object = json!({ "somekey" : [ "somedata", 1.0f32, 2.0f32, 3.0f32, 4.0f32 ] }).as_object().unwrap().clone();
+    /// replica.create_object("myobject", object.clone());
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// let value = replica.get_value("myobject", &winner).unwrap();
+    /// assert_eq!(value, object);
+    /// ```
     pub fn get_value(&self, uuid: &str, revision: &str) -> Result<Map<String, Value>> {
         let revision = Revision::from(revision).expect("instatus_revision_string");
         match self.documents.read().unwrap().get(uuid) {
@@ -429,221 +458,24 @@ impl Melda {
         }
     }
 
-    // Fetch a block and verify digest
-    fn fetch_raw_block(&self, blockid: &str) -> Result<Map<String, Value>> {
-        let object = blockid.to_string() + DELTA_EXTENSION;
-        let data = self.data.read().unwrap();
-        let data = data.read_raw_object(object.as_str(), 0, 0)?;
-        let json = std::str::from_utf8(&data)?;
-        let json: Value = serde_json::from_str(json)?;
-        if !json.is_object() {
-            bail!("instatus_block_format");
-        }
-        let blockobj = json.as_object().unwrap();
-        let digest = digest_bytes(data.as_slice());
-        if !digest.eq(blockid) {
-            bail!("mismatching_block_hash");
-        };
-        Ok(blockobj.clone())
-    }
-
-    /// Parse a block
-    fn parse_raw_block(&self, b_id: String, raw_block: Map<String, Value>) -> Result<Block> {
-        // Block values
-        let mut b_parents: Option<Vec<String>> = None;
-        let mut b_info: Option<Map<String, Value>> = None;
-        let mut b_packs: Option<Vec<String>> = None;
-        let mut b_changes: Option<Vec<Change>> = None;
-        // Parse raw block fields
-        if raw_block.contains_key(CHANGESETS_FIELD) {
-            if raw_block.contains_key(PACK_FIELD) {
-                let packs = raw_block
-                    .get(PACK_FIELD)
-                    .ok_or(anyhow!("missing_pack_reference"))
-                    .unwrap()
-                    .as_array()
-                    .ok_or(anyhow!("packs_not_an_array"))?;
-                if !packs.iter().all(|x| {
-                    if x.is_string() {
-                        let data = self.data.read().unwrap();
-                        match data.is_readable_and_valid_pack(x.as_str().unwrap()) {
-                            Ok(v) => v,
-                            Err(_) => false,
-                        }
-                    } else {
-                        false
-                    }
-                }) {
-                    bail!("missing_packs");
-                }
-                // Collect identifiers
-                b_packs = Some(
-                    packs
-                        .iter()
-                        .map(|p| p.as_str().unwrap().to_string())
-                        .collect(),
-                );
-            }
-            if raw_block.contains_key(INFORMATION_FIELD) {
-                let info = raw_block
-                    .get(INFORMATION_FIELD)
-                    .ok_or(anyhow!("missing_root_id"))?;
-                if !info.is_object() {
-                    bail!("info_not_an_object");
-                }
-                // Save identifier
-                b_info = Some(info.as_object().unwrap().clone());
-            }
-            if raw_block.contains_key(PARENTS_FIELD) {
-                let parents = raw_block
-                    .get(PARENTS_FIELD)
-                    .ok_or(anyhow!("missing_parents_field"))?;
-                if !parents.is_array() {
-                    bail!("parents_not_an_array");
-                }
-                let mut ps = vec![];
-                for p in parents.as_array().unwrap() {
-                    if p.is_string() {
-                        ps.push(p.as_str().unwrap().to_string());
-                    }
-                }
-                // Save parents
-                b_parents = Some(ps);
-            }
-            let changes = raw_block.get(CHANGESETS_FIELD);
-            if changes.is_some() && changes.unwrap().is_array() {
-                // Process changeset
-                let mut cs: Vec<Change> = vec![];
-                for c in changes.unwrap().as_array().unwrap() {
-                    if c.is_array() {
-                        let record = c.as_array().unwrap();
-                        if record.len() == 2 {
-                            // Creation record
-                            let uuid =
-                                record[0].as_str().ok_or(anyhow!("expecting_uuid_string"))?;
-                            let digest = record[1]
-                                .as_str()
-                                .ok_or(anyhow!("expecting_digest_string"))?;
-                            let r = Revision::new(1, digest.to_string(), None);
-                            cs.push(Change(uuid.to_string(), r, None));
-                        } else if record.len() == 3 {
-                            // Update record
-                            let uuid =
-                                record[0].as_str().ok_or(anyhow!("expecting_uuid_string"))?;
-                            let prev = record[1]
-                                .as_str()
-                                .ok_or(anyhow!("expecting_revision_string"))?;
-                            let digest = record[2]
-                                .as_str()
-                                .ok_or(anyhow!("expecting_digest_string"))?;
-                            let prev = Revision::from(prev)?;
-                            let r = Revision::new(prev.index + 1, digest.to_string(), Some(&prev));
-                            cs.push(Change(uuid.to_string(), r, Some(prev)));
-                        } else if record.len() == 4 {
-                            // Update record with delta
-                            let uuid =
-                                record[0].as_str().ok_or(anyhow!("expecting_uuid_string"))?;
-                            let prev = record[1]
-                                .as_str()
-                                .ok_or(anyhow!("expecting_revision_string"))?;
-                            let digest = record[2]
-                                .as_str()
-                                .ok_or(anyhow!("expecting_digest_string"))?;
-                            let delta_digest = record[3]
-                                .as_str()
-                                .ok_or(anyhow!("expecting_digest_string"))?;
-                            let prev = Revision::from(prev)?;
-                            let r = Revision::new_with_delta(
-                                prev.index + 1,
-                                digest.to_string(),
-                                delta_digest.to_string(),
-                                Some(&prev),
-                            );
-                            cs.push(Change(uuid.to_string(), r, Some(prev)));
-                        } else {
-                            bail!("instatus_changes_record")
-                        }
-                    }
-                }
-                if !cs.is_empty() {
-                    b_changes = Some(cs);
-                }
-            }
-        }
-        Ok(Block {
-            id: b_id,
-            parents: b_parents,
-            info: b_info,
-            packs: b_packs,
-            changes: b_changes,
-            status: Status::Unknown,
-        })
-    }
-
-    fn check_block(&self, bid: &str) -> Status {
-        let blocks = self.blocks.read().unwrap();
-        let data = self.data.read().unwrap();
-        let packs = data.get_loaded_packs();
-        if let Some(block) = blocks.get(bid) {
-            // If the block status has been determined return the corresponding value
-            let mut status = block.read().unwrap().status;
-            if status != Status::Unknown {
-                return status;
-            }
-            // Verify that all packs are available
-            status = Status::Valid;
-            if let Some(pks) = &block.read().unwrap().packs {
-                if !pks.par_iter().all(|pack| packs.contains(pack)) {
-                    status = Status::Invalid;
-                }
-            };
-            if status == Status::Valid {
-                // Verify that all parent blocks are status
-                if let Some(parents) = &block.read().unwrap().parents {
-                    if !parents
-                        .iter()
-                        .all(|parent| self.check_block(parent) != Status::Invalid)
-                    {
-                        status = Status::Invalid;
-                    }
-                };
-            }
-            block.write().unwrap().status = status;
-            status
-        } else {
-            Status::Invalid
-        }
-    }
-
-    fn mark_valid_blocks(&self) {
-        let blocks = self.blocks.read().unwrap();
-        blocks.iter().for_each(|(bid, block)| {
-            let status = block.read().unwrap().status;
-            if status == Status::Unknown {
-                self.check_block(bid);
-            }
-        });
-    }
-
-    fn apply_block(&self, block: &Block) -> Result<()> {
-        if let Some(changes) = &block.changes {
-            for change in changes {
-                let Change(uuid, r, prev) = change;
-                if !self.documents.read().unwrap().contains_key(uuid) {
-                    let mut rt = RevisionTree::new();
-                    rt.add(r.clone(), prev.clone());
-                    self.documents.write().unwrap().insert(uuid.to_string(), rt);
-                } else {
-                    let mut docs = self.documents.write().unwrap();
-                    let rt = docs.get_mut(uuid).unwrap();
-                    rt.add(r.clone(), prev.clone());
-                }
-            }
-        };
-        Ok(())
-    }
-
-    // FIXME: Reimplement using LWBlocks inside the state
+    /// Returns a set of the current anchor blocks (blocks that have not been referenced as parents)
+    ///
+    /// # Example
+    /// ```
+    /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
+    /// use std::sync::{Arc, Mutex, RwLock};
+    /// use serde_json::{Map, Value,json};
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let mut replica = Melda::new(Arc::new(RwLock::new(adapter))).expect("cannot_initialize_crdt");
+    /// let object = json!({ "somekey" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
+    /// replica.create_object("myobject", object);
+    /// let anchors = replica.get_anchors();
+    /// assert!(anchors.is_empty());
+    /// let block = replica.commit(None).unwrap().unwrap();
+    /// let anchors = replica.get_anchors();
+    /// assert!(anchors.len() == 1);
+    /// assert!(anchors.contains(&block));
+    /// ```
     pub fn get_anchors(&self) -> BTreeSet<String> {
         let blocks_r = self.blocks.read().unwrap();
         // Return the identifiers of all blocks which are not referenced as parents
@@ -666,6 +498,29 @@ impl Melda {
         anchors
     }
 
+    /// Reloads the CRDT (reloads all delta blocks)
+    ///
+    /// # Example
+    /// ```
+    /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
+    /// use std::sync::{Arc, Mutex, RwLock};
+    /// use serde_json::{Map, Value,json};
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let adapter = Arc::new(RwLock::new(adapter));
+    /// let mut replica = Melda::new(adapter.clone()).expect("cannot_initialize_crdt");
+    /// let object = json!({ "somekey" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
+    /// replica.create_object("myobject", object);  
+    /// assert!(replica.get_all_objects().contains("myobject"));
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
+    /// let block = replica.commit(None).unwrap().unwrap();
+    /// let anchors = replica.get_anchors();
+    /// assert!(anchors.len() == 1);
+    /// assert!(anchors.contains(&block));
+    /// replica.reload();
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
+    /// ```    
     pub fn reload(&mut self) -> Result<()> {
         // Check that stage is empty, otherwise fail (user must unstage explicity if necessary)
         if !self.stage.read().unwrap().is_empty() {
@@ -717,6 +572,29 @@ impl Melda {
         Ok(())
     }
 
+    /// Loads newly available blocks
+    ///
+    /// # Example
+    /// ```
+    /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
+    /// use std::sync::{Arc, Mutex, RwLock};
+    /// use serde_json::{Map, Value,json};
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let adapter = Arc::new(RwLock::new(adapter));
+    /// let mut replica = Melda::new(adapter.clone()).expect("cannot_initialize_crdt");
+    /// let object = json!({ "somekey" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
+    /// replica.create_object("myobject", object);  
+    /// assert!(replica.get_all_objects().contains("myobject"));
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
+    /// let block = replica.commit(None).unwrap().unwrap();
+    /// let anchors = replica.get_anchors();
+    /// assert!(anchors.len() == 1);
+    /// assert!(anchors.contains(&block));
+    /// replica.refresh();
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
+    /// ```    
     pub fn refresh(&mut self) -> Result<()> {
         // 1. Save stage
         let stage = self.stage()?;
@@ -799,7 +677,39 @@ impl Melda {
         Ok(())
     }
 
-    /// Loads all blocks until block_id (included). Discards the existing information (including the stage)
+    /// Reloads the CRDT until the given block
+    ///
+    /// # Arguments
+    ///
+    /// * `block` - Block identifier
+    ///
+    /// # Example
+    /// ```
+    /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
+    /// use std::sync::{Arc, Mutex, RwLock};
+    /// use serde_json::{Map, Value,json};
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let adapter = Arc::new(RwLock::new(adapter));
+    /// let mut replica = Melda::new(adapter.clone()).expect("cannot_initialize_crdt");
+    /// let object = json!({ "somekey" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
+    /// replica.create_object("myobject", object);  
+    /// assert!(replica.get_all_objects().contains("myobject"));
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
+    /// let block_id = replica.commit(None).unwrap().unwrap();
+    /// replica.delete_object("myobject");
+    /// assert!(replica.get_all_objects().contains("myobject"));
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// assert_eq!("2-d_e5d1d20", winner);
+    /// let value = replica.get_value("myobject", &winner);
+    /// assert!(value.is_ok());
+    /// assert!(value.unwrap().contains_key("_deleted"));
+    /// let info = json!({ "author" : "Some user", "date" : "2022-05-23 13:47:00CET" }).as_object().unwrap().clone();
+    /// replica.commit(Some(info));
+    /// replica.reload_until(&block_id);
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
+    /// ```
     pub fn reload_until(&mut self, block_id: &str) -> Result<()> {
         let stage_r = self.stage.read().expect("cannot_acquire_stage_for_reading");
         let mut documents_w = self
@@ -883,6 +793,33 @@ impl Melda {
         Ok(())
     }
 
+    /// Drops uncommitted changes
+    ///
+    /// # Example
+    /// ```
+    /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
+    /// use std::sync::{Arc, Mutex, RwLock};
+    /// use serde_json::{Map, Value,json};
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let adapter = Arc::new(RwLock::new(adapter));
+    /// let mut replica = Melda::new(adapter.clone()).expect("cannot_initialize_crdt");
+    /// let object = json!({ "somekey" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
+    /// replica.create_object("myobject", object);  
+    /// assert!(replica.get_all_objects().contains("myobject"));
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
+    /// let block_id = replica.commit(None).unwrap().unwrap();
+    /// replica.delete_object("myobject");
+    /// assert!(replica.get_all_objects().contains("myobject"));
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// assert_eq!("2-d_e5d1d20", winner);
+    /// let value = replica.get_value("myobject", &winner);
+    /// assert!(value.is_ok());
+    /// assert!(value.unwrap().contains_key("_deleted"));
+    /// replica.unstage();
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
+    /// ```
     pub fn unstage(&mut self) -> Result<()> {
         self.data.write().unwrap().unstage()?;
         let mut stage = self.stage.write().unwrap();
@@ -1128,7 +1065,7 @@ impl Melda {
     }
 
     /// Returns the conflicting revisions for the given object
-    pub fn conflicting<T>(&self, uuid: T) -> Result<Vec<String>>
+    pub fn get_conflicting<T>(&self, uuid: T) -> Result<Vec<String>>
     where
         T: AsRef<str>,
     {
@@ -1273,7 +1210,6 @@ impl Melda {
         }
     }
 
-    // TODO: Do not stage changes which are already there
     pub fn replay_stage(&mut self, s: &Option<Value>) -> Result<()> {
         if let Some(s) = s {
             if s.is_object() {
@@ -1423,5 +1359,219 @@ impl Melda {
         } else {
             Ok(())
         }
+    }
+
+    // Fetch a block and verify digest
+    fn fetch_raw_block(&self, blockid: &str) -> Result<Map<String, Value>> {
+        let object = blockid.to_string() + DELTA_EXTENSION;
+        let data = self.data.read().unwrap();
+        let data = data.read_raw_object(object.as_str(), 0, 0)?;
+        let json = std::str::from_utf8(&data)?;
+        let json: Value = serde_json::from_str(json)?;
+        if !json.is_object() {
+            bail!("instatus_block_format");
+        }
+        let blockobj = json.as_object().unwrap();
+        let digest = digest_bytes(data.as_slice());
+        if !digest.eq(blockid) {
+            bail!("mismatching_block_hash");
+        };
+        Ok(blockobj.clone())
+    }
+
+    /// Parse a block
+    fn parse_raw_block(&self, b_id: String, raw_block: Map<String, Value>) -> Result<Block> {
+        // Block values
+        let mut b_parents: Option<Vec<String>> = None;
+        let mut b_info: Option<Map<String, Value>> = None;
+        let mut b_packs: Option<Vec<String>> = None;
+        let mut b_changes: Option<Vec<Change>> = None;
+        // Parse raw block fields
+        if raw_block.contains_key(CHANGESETS_FIELD) {
+            if raw_block.contains_key(PACK_FIELD) {
+                let packs = raw_block
+                    .get(PACK_FIELD)
+                    .ok_or(anyhow!("missing_pack_reference"))
+                    .unwrap()
+                    .as_array()
+                    .ok_or(anyhow!("packs_not_an_array"))?;
+                if !packs.iter().all(|x| {
+                    if x.is_string() {
+                        let data = self.data.read().unwrap();
+                        match data.is_readable_and_valid_pack(x.as_str().unwrap()) {
+                            Ok(v) => v,
+                            Err(_) => false,
+                        }
+                    } else {
+                        false
+                    }
+                }) {
+                    bail!("missing_packs");
+                }
+                // Collect identifiers
+                b_packs = Some(
+                    packs
+                        .iter()
+                        .map(|p| p.as_str().unwrap().to_string())
+                        .collect(),
+                );
+            }
+            if raw_block.contains_key(INFORMATION_FIELD) {
+                let info = raw_block
+                    .get(INFORMATION_FIELD)
+                    .ok_or(anyhow!("missing_root_id"))?;
+                if !info.is_object() {
+                    bail!("info_not_an_object");
+                }
+                // Save identifier
+                b_info = Some(info.as_object().unwrap().clone());
+            }
+            if raw_block.contains_key(PARENTS_FIELD) {
+                let parents = raw_block
+                    .get(PARENTS_FIELD)
+                    .ok_or(anyhow!("missing_parents_field"))?;
+                if !parents.is_array() {
+                    bail!("parents_not_an_array");
+                }
+                let mut ps = vec![];
+                for p in parents.as_array().unwrap() {
+                    if p.is_string() {
+                        ps.push(p.as_str().unwrap().to_string());
+                    }
+                }
+                // Save parents
+                b_parents = Some(ps);
+            }
+            let changes = raw_block.get(CHANGESETS_FIELD);
+            if changes.is_some() && changes.unwrap().is_array() {
+                // Process changeset
+                let mut cs: Vec<Change> = vec![];
+                for c in changes.unwrap().as_array().unwrap() {
+                    if c.is_array() {
+                        let record = c.as_array().unwrap();
+                        if record.len() == 2 {
+                            // Creation record
+                            let uuid =
+                                record[0].as_str().ok_or(anyhow!("expecting_uuid_string"))?;
+                            let digest = record[1]
+                                .as_str()
+                                .ok_or(anyhow!("expecting_digest_string"))?;
+                            let r = Revision::new(1, digest.to_string(), None);
+                            cs.push(Change(uuid.to_string(), r, None));
+                        } else if record.len() == 3 {
+                            // Update record
+                            let uuid =
+                                record[0].as_str().ok_or(anyhow!("expecting_uuid_string"))?;
+                            let prev = record[1]
+                                .as_str()
+                                .ok_or(anyhow!("expecting_revision_string"))?;
+                            let digest = record[2]
+                                .as_str()
+                                .ok_or(anyhow!("expecting_digest_string"))?;
+                            let prev = Revision::from(prev)?;
+                            let r = Revision::new(prev.index + 1, digest.to_string(), Some(&prev));
+                            cs.push(Change(uuid.to_string(), r, Some(prev)));
+                        } else if record.len() == 4 {
+                            // Update record with delta
+                            let uuid =
+                                record[0].as_str().ok_or(anyhow!("expecting_uuid_string"))?;
+                            let prev = record[1]
+                                .as_str()
+                                .ok_or(anyhow!("expecting_revision_string"))?;
+                            let digest = record[2]
+                                .as_str()
+                                .ok_or(anyhow!("expecting_digest_string"))?;
+                            let delta_digest = record[3]
+                                .as_str()
+                                .ok_or(anyhow!("expecting_digest_string"))?;
+                            let prev = Revision::from(prev)?;
+                            let r = Revision::new_with_delta(
+                                prev.index + 1,
+                                digest.to_string(),
+                                delta_digest.to_string(),
+                                Some(&prev),
+                            );
+                            cs.push(Change(uuid.to_string(), r, Some(prev)));
+                        } else {
+                            bail!("instatus_changes_record")
+                        }
+                    }
+                }
+                if !cs.is_empty() {
+                    b_changes = Some(cs);
+                }
+            }
+        }
+        Ok(Block {
+            id: b_id,
+            parents: b_parents,
+            info: b_info,
+            packs: b_packs,
+            changes: b_changes,
+            status: Status::Unknown,
+        })
+    }
+
+    fn check_block(&self, bid: &str) -> Status {
+        let blocks = self.blocks.read().unwrap();
+        let data = self.data.read().unwrap();
+        let packs = data.get_loaded_packs();
+        if let Some(block) = blocks.get(bid) {
+            // If the block status has been determined return the corresponding value
+            let mut status = block.read().unwrap().status;
+            if status != Status::Unknown {
+                return status;
+            }
+            // Verify that all packs are available
+            status = Status::Valid;
+            if let Some(pks) = &block.read().unwrap().packs {
+                if !pks.par_iter().all(|pack| packs.contains(pack)) {
+                    status = Status::Invalid;
+                }
+            };
+            if status == Status::Valid {
+                // Verify that all parent blocks are status
+                if let Some(parents) = &block.read().unwrap().parents {
+                    if !parents
+                        .iter()
+                        .all(|parent| self.check_block(parent) != Status::Invalid)
+                    {
+                        status = Status::Invalid;
+                    }
+                };
+            }
+            block.write().unwrap().status = status;
+            status
+        } else {
+            Status::Invalid
+        }
+    }
+
+    fn mark_valid_blocks(&self) {
+        let blocks = self.blocks.read().unwrap();
+        blocks.iter().for_each(|(bid, block)| {
+            let status = block.read().unwrap().status;
+            if status == Status::Unknown {
+                self.check_block(bid);
+            }
+        });
+    }
+
+    fn apply_block(&self, block: &Block) -> Result<()> {
+        if let Some(changes) = &block.changes {
+            for change in changes {
+                let Change(uuid, r, prev) = change;
+                if !self.documents.read().unwrap().contains_key(uuid) {
+                    let mut rt = RevisionTree::new();
+                    rt.add(r.clone(), prev.clone());
+                    self.documents.write().unwrap().insert(uuid.to_string(), rt);
+                } else {
+                    let mut docs = self.documents.write().unwrap();
+                    let rt = docs.get_mut(uuid).unwrap();
+                    rt.add(r.clone(), prev.clone());
+                }
+            }
+        };
+        Ok(())
     }
 }
