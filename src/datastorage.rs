@@ -26,13 +26,15 @@ use serde_json::json;
 use serde_json::Map;
 use serde_json::Value;
 use std::cell::RefCell;
+use std::collections::BTreeSet;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
 
 pub struct DataStorage {
     adapter: Arc<RwLock<Box<dyn Adapter>>>,
-    pack: HashMap<String, Value>,
+    stage: HashMap<String, Value>,
     objects: HashMap<String, (String, usize, usize)>,
+    loaded_packs: BTreeSet<String>,
     cache: Mutex<RefCell<LruCache<String, Map<String, Value>>>>,
     force_full_array_interval: u32,
 }
@@ -60,8 +62,9 @@ impl DataStorage {
             .unwrap();
         DataStorage {
             adapter,
-            pack: HashMap::<String, Value>::new(),
+            stage: HashMap::<String, Value>::new(),
             objects: HashMap::<String, (String, usize, usize)>::new(),
+            loaded_packs: BTreeSet::new(),
             cache: Mutex::new(RefCell::new(LruCache::<String, Map<String, Value>>::new(
                 cache_size,
             ))),
@@ -72,12 +75,12 @@ impl DataStorage {
     /// Merges another DataStorage into this one
     pub fn merge(&mut self, other: &DataStorage) -> Result<()> {
         for (digest, _) in &other.objects {
-            if !self.objects.contains_key(digest) && !self.pack.contains_key(digest) {
+            if !self.objects.contains_key(digest) && !self.stage.contains_key(digest) {
                 self.write_data(digest, other.read_data(digest)?.unwrap())?;
             }
         }
-        for (digest, _) in &other.pack {
-            if !self.objects.contains_key(digest) && !self.pack.contains_key(digest) {
+        for (digest, _) in &other.stage {
+            if !self.objects.contains_key(digest) && !self.stage.contains_key(digest) {
                 self.write_data(digest, other.read_data(digest)?.unwrap())?;
             }
         }
@@ -148,8 +151,12 @@ impl DataStorage {
     }
 
     /// Reloads the storage
-    pub fn reload(&mut self) -> Result<()> {
-        self.pack.clear();
+    /// TODO: This can be partially replaced by a call to refresh
+    pub fn reload(&mut self) -> Result<Vec<String>> {
+        if !self.stage.is_empty() {
+            bail!("non_empty_data_stage");
+        }
+        self.loaded_packs.clear();
         self.objects.clear();
         let pack_list = self.adapter.read().unwrap().list_objects(PACK_EXTENSION)?;
         let index_list = self.adapter.read().unwrap().list_objects(INDEX_EXTENSION)?;
@@ -161,8 +168,40 @@ impl DataStorage {
                 } else {
                     self.load_pack(i)?;
                 }
+                self.loaded_packs.insert(i.clone());
             }
         }
+        Ok(pack_list)
+    }
+
+    pub fn get_loaded_packs(&self) -> &BTreeSet<String> {
+        return &self.loaded_packs;
+    }
+
+    pub fn refresh(&mut self) -> Result<Vec<String>> {
+        let pack_list = self.adapter.read().unwrap().list_objects(PACK_EXTENSION)?;
+        let index_list = self.adapter.read().unwrap().list_objects(INDEX_EXTENSION)?;
+        let index_set = index_list.into_iter().collect::<HashSet<_>>();
+        let mut new_packs = vec![];
+        if !pack_list.is_empty() {
+            for i in &pack_list {
+                if self.loaded_packs.contains(i) {
+                    continue;
+                }
+                if index_set.contains(i) {
+                    self.load_index(i)?;
+                } else {
+                    self.load_pack(i)?;
+                }
+                self.loaded_packs.insert(i.clone());
+                new_packs.push(i.clone());
+            }
+        }
+        Ok(new_packs)
+    }
+
+    pub fn unstage(&mut self) -> Result<()> {
+        self.stage.clear();
         Ok(())
     }
 
@@ -176,6 +215,16 @@ impl DataStorage {
             }
             Err(e) => Err(e),
         }
+    }
+
+    pub fn replicate(&mut self, other: &DataStorage) -> Result<()> {
+        for p in &other.loaded_packs {
+            if !self.loaded_packs.contains(p) {
+                let rawdata = self.read_raw_object(&p, 0, 0)?;
+                self.write_raw_object(p, &rawdata)?;
+            }
+        }
+        Ok(())
     }
 
     /// Writes an object associating it with the given revision (digest)
@@ -265,9 +314,15 @@ impl DataStorage {
                 // Store this delta revision in the reconstruction path
                 reconstruction_path.push(crev);
                 // Retrieve the parent revision
-                crev = match rt.parent(crev) {
+                crev = match rt.get_parent(crev) {
                     Some(r) => r,
-                    None => return Err(anyhow!("failed_to_determine_parent {} {:?}", crev.to_string(), reconstruction_path)),
+                    None => {
+                        return Err(anyhow!(
+                            "failed_to_determine_parent {} {:?}",
+                            crev.to_string(),
+                            reconstruction_path
+                        ))
+                    }
                 };
             }
         }
@@ -380,7 +435,7 @@ impl DataStorage {
         base_revision: &Revision,
         rt: &RevisionTree,
     ) -> Result<Map<String, Value>> {
-        let leafs = rt.leafs();
+        let leafs = rt.get_leafs();
         // The base object corresponds to the revision we want to keep
         let base_object = self.read_full_object(base_revision, rt)?;
         if leafs.len() > 1 {
@@ -466,7 +521,11 @@ impl DataStorage {
         revision: &Revision,
         rt: &RevisionTree,
     ) -> Result<Map<String, Value>> {
-        if revision.digest.len() <= 8 && u32::from_str_radix(&revision.digest, 16).is_ok() {
+        if revision.is_deleted() {
+            Ok(json!({"_deleted":true}).as_object().unwrap().clone())
+        } else if revision.is_resolved() {
+            Ok(json!({"_resolved":true}).as_object().unwrap().clone())
+        } else if revision.digest.len() <= 8 && u32::from_str_radix(&revision.digest, 16).is_ok() {
             let mut o = Map::<String, Value>::new();
             o.insert(HASH_FIELD.to_string(), Value::from(revision.digest.clone()));
             Ok(o)
@@ -487,7 +546,7 @@ impl DataStorage {
     ) -> Result<Option<Map<String, Value>>> {
         // Reference object that might be loaded and used if there is a delta field
         let mut delta_reference_object: Option<Map<String, Value>> = None;
-        let delta_reference_revision = rt.winner();
+        let delta_reference_revision = rt.get_winner();
         if let Some(r) = delta_reference_revision {
             if self.force_full_array_interval != 0 && r.index % self.force_full_array_interval == 0
             {
@@ -551,8 +610,8 @@ impl DataStorage {
 
     /// Writes the given value (object) into the temporary pack (if not already there)
     pub fn write_data(&mut self, digest: &str, obj: Value) -> Result<()> {
-        if !self.objects.contains_key(digest) && !self.pack.contains_key(digest) {
-            self.pack.insert(digest.to_string(), obj);
+        if !self.objects.contains_key(digest) && !self.stage.contains_key(digest) {
+            self.stage.insert(digest.to_string(), obj);
         }
         Ok(())
     }
@@ -574,8 +633,8 @@ impl DataStorage {
             } else {
                 bail!("not_an_object")
             }
-        } else if self.pack.contains_key(digest) {
-            Ok(Some(self.pack.get(digest).unwrap().clone()))
+        } else if self.stage.contains_key(digest) {
+            Ok(Some(self.stage.get(digest).unwrap().clone()))
         } else {
             Ok(None)
         }
@@ -584,15 +643,15 @@ impl DataStorage {
     /// Packs temporary data into a new pack with an index (committing to the adapter)
     /// Returns the identifier or the pack (digest of its contents)
     pub fn pack(&mut self) -> Result<Option<String>> {
-        if self.pack.is_empty() {
+        if self.stage.is_empty() {
             return Ok(None);
         }
         let mut index_map = Map::<String, Value>::new();
         let mut buf = Vec::<u8>::new();
         let mut start: usize = 1;
         buf.push(b'[');
-        let mut remaining = self.pack.len();
-        for (digest, v) in &self.pack {
+        let mut remaining = self.stage.len();
+        for (digest, v) in &self.stage {
             let content = serde_json::to_string(&v).unwrap();
             let bytes = content.as_bytes();
             buf.extend_from_slice(&bytes);
@@ -619,13 +678,13 @@ impl DataStorage {
             drop(adapter);
         }
         self.load_index_object(&pack_digest, &index_map)?;
-        self.pack.clear();
+        self.stage.clear();
         Ok(Some(pack_digest))
     }
 
     pub fn stage(&self) -> Result<Value> {
         let mut r = Map::<String, Value>::new();
-        for (digest, v) in &self.pack {
+        for (digest, v) in &self.stage {
             r.insert(digest.clone(), v.clone());
         }
         Ok(Value::from(r))
@@ -635,7 +694,9 @@ impl DataStorage {
         if s.is_object() {
             let s = s.as_object().unwrap();
             for (digest, v) in s {
-                self.pack.insert(digest.clone(), v.clone());
+                if !self.objects.contains_key(digest) {
+                    self.stage.insert(digest.clone(), v.clone());
+                }
             }
             Ok(())
         } else {
