@@ -36,7 +36,7 @@ replica.update(newer_version.clone()).expect("failed_to_update");
 Finally, you need to commit those changes:
 
 ```rust
-replica.commit(None, false).expect("failed_to_commit");
+replica.commit(None).expect("failed_to_commit");
 ```
 Upon commit a delta state will be written on the backend adapter (in this example, a *delta* and a *pack* file will be written to disk).
 To read the data structure back into a JSON document use the *read* procedure:
