@@ -47,7 +47,7 @@ let root_obj = data.as_object().expect("not_an_object");
 
 # Benchmarks
 
-In the benchmark directory you will find a benchmark comparing Melda to Automerge
+In the [libmelda-benchmarks](https://github.com/slashdotted/libmelda-benchmarks) repository you will find a benchmark comparing Melda to Automerge
 
 # Example integration
 
