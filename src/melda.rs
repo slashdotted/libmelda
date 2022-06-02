@@ -1357,7 +1357,13 @@ impl Melda {
         for r in leafs {
             if r != winner {
                 let resolved = Revision::new_resolved(&r);
-                rt.add(resolved, Some(r.clone()));
+                if rt.add(resolved.clone(), Some(r.clone())) {
+                    self.stage.write().unwrap().push(Change(
+                        uuid.to_string(),
+                        resolved,
+                        Some(r.clone()),
+                    ));
+                }
             }
         }
         Ok(winner.to_string())
