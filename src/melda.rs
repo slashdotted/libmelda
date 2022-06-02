@@ -1320,7 +1320,7 @@ impl Melda {
     /// replica2.resolve_as("myobject", &winner2);
     /// let winner = replica2.get_winner("myobject").unwrap();
     /// assert_eq!("2-255cc6219e48f526c04bc5af86439c34e4fe39fcdc611758ff833a2ff80583f0_e5d1d20", winner);
-    pub fn resolve_as(&mut self, uuid: &str, winner: &str) -> Result<()> {
+    pub fn resolve_as(&mut self, uuid: &str, winner: &str) -> Result<String> {
         {
             let winner = Revision::from(winner).expect("instatus_revision_string");
             let docs_r = self.documents.read().unwrap();
@@ -1328,11 +1328,11 @@ impl Melda {
             let leafs = rt.get_leafs();
             // We can only resolve to a status revision
             if !leafs.contains(&winner) {
-                bail!("instatus_winner_revision");
+                bail!("invalid_winner_revision");
             }
             // If there is only one leaf nothing needs to be resolved
             if leafs.len() <= 1 {
-                return Ok(());
+                bail!("not_in_conflict");
             }
             // Update the winner to ensure that we do not change the view
             let data_r = self.data.read().unwrap();
@@ -1360,7 +1360,7 @@ impl Melda {
                 rt.add(resolved, Some(r.clone()));
             }
         }
-        Ok(())
+        Ok(winner.to_string())
     }
 
     /// Saves the current stage
