@@ -4,7 +4,8 @@ Melda is a Delta-State JSON CRDT. CRDTs, which stand for Conflict-free Replicate
 
 There exist different types of CRDTs: operation-based CRDTs (which generate and exchange update operations between replicas), state-based CRDTS (which exchange and merge the full state of each replica) and delta-state CRDT, such as Melda, (which exchange only the differences between versions, or states, of the data type).
 
-Melda natively supports the JSON data format and provides a way to synchronize changes made to arbitrary JSON documents.
+Melda natively supports the JSON data format and provides a way to synchronize changes made to arbitrary JSON documents. You can work with Melda CRDTs either using this Rust library or using a [command line tool](https://github.com/slashdotted/libmelda-tools/).
+
 
 # How do I use Melda?
 
