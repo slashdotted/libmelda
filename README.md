@@ -304,7 +304,7 @@ It is possible to navigate through commits by means of the **reload_until** meth
 ```
 
 As expected, reading the JSON document now shows the first version:
-```
+```json
 {"_id":"√","items♭":[],"software":"MeldaDo","version":"1.0.0"}
 ```
 
