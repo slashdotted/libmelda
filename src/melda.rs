@@ -1746,12 +1746,14 @@ impl Melda {
                     bail!("missing_packs");
                 }
                 // Collect identifiers
-                b_packs = Some(
-                    packs
-                        .iter()
-                        .map(|p| p.as_str().unwrap().to_string())
-                        .collect(),
-                );
+                if !packs.is_empty() {
+                    b_packs = Some(
+                        packs
+                            .iter()
+                            .map(|p| p.as_str().unwrap().to_string())
+                            .collect(),
+                    );
+                }
             }
             if raw_block.contains_key(INFORMATION_FIELD) {
                 let info = raw_block
@@ -1777,7 +1779,9 @@ impl Melda {
                     }
                 }
                 // Save parents
-                b_parents = Some(ps);
+                if !ps.is_empty() {
+                    b_parents = Some(ps);
+                }
             }
             let changes = raw_block.get(CHANGESETS_FIELD);
             if changes.is_some() && changes.unwrap().is_array() {
