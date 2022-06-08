@@ -55,9 +55,9 @@ enum Status {
 #[derive(Clone)]
 pub struct Block {
     pub id: String,
-    pub parents: Option<Vec<String>>,
+    pub parents: Option<BTreeSet<String>>,
     pub info: Option<Map<String, Value>>,
-    pub packs: Option<Vec<String>>,
+    pub packs: Option<BTreeSet<String>>,
     changes: Option<Vec<Change>>,
     status: Status,
 }
@@ -1719,9 +1719,9 @@ impl Melda {
     /// Parse a block
     fn parse_raw_block(&self, b_id: String, raw_block: Map<String, Value>) -> Result<Block> {
         // Block values
-        let mut b_parents: Option<Vec<String>> = None;
+        let mut b_parents: Option<BTreeSet<String>> = None;
         let mut b_info: Option<Map<String, Value>> = None;
-        let mut b_packs: Option<Vec<String>> = None;
+        let mut b_packs: Option<BTreeSet<String>> = None;
         let mut b_changes: Option<Vec<Change>> = None;
         // Parse raw block fields
         if raw_block.contains_key(CHANGESETS_FIELD) {
@@ -1770,10 +1770,10 @@ impl Melda {
                 if !parents.is_array() {
                     bail!("parents_not_an_array");
                 }
-                let mut ps = vec![];
+                let mut ps = BTreeSet::new();
                 for p in parents.as_array().unwrap() {
                     if p.is_string() {
-                        ps.push(p.as_str().unwrap().to_string());
+                        ps.insert(p.as_str().unwrap().to_string());
                     }
                 }
                 // Save parents
