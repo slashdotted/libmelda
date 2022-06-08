@@ -283,7 +283,7 @@ The **parents** field contains the identifiers of parent blocks (it is **None** 
 
 ## Going back in time
 It is possible to navigate through commits by means of the **reload_until** method. As an example, suppose that Alice wants to go back to the origin:
-```
+```rust
  let mut anchors: Vec<String> = m.get_anchors().into_iter().collect();
     let mut block_id = anchors.get(0).cloned();
     while block_id.is_some() {
