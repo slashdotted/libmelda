@@ -4,9 +4,12 @@ version = "0.1.7"
 authors = ["Amos Brocco <amos.brocco@supsi.ch>"]
 edition = "2018"
 license = "GPL-3.0"
+description = "Melda is a Delta-State JSON CRDT"
+homepage = "https://github.com/slashdotted/libmelda"
+repository = "https://github.com/slashdotted/libmelda"
 
 [dependencies]
-yavomrs = { git = "https://github.com/slashdotted/yavomrs.git"}
+yavomrs = "0.1.0"
 rust-crypto = "0.2.36"
 regex = "1.5.4"
 serde_json = "1.0"
