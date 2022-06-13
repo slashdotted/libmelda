@@ -1,4 +1,4 @@
-// Melda - Delta State JSON CRDT
+ // Melda - Delta State JSON CRDT
 // Copyright (C) 2021-2022 Amos Brocco <amos.brocco@supsi.ch>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -24,6 +24,7 @@ use rio_api::model::NamedNode;
 use rio_api::parser::TriplesParser;
 use rio_turtle::{TurtleError, TurtleParser};
 use std::cell::RefCell;
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Mutex;
 use std::{collections::HashMap, env};
@@ -35,7 +36,7 @@ pub struct SolidAdapter {
     folder: String,
     url: String,
     client: Client,
-    cache: Mutex<RefCell<LruCache<String, String>>>,
+    cache: Mutex<RefCell<LruCache<String, Vec<u8>>>>,
     disk_cache_dir: String,
 }
 
@@ -67,17 +68,18 @@ impl SolidAdapter {
             password.unwrap()
         } else {
             env::var("MELDA_SOLID_PASSWORD")?
-        };
+        };    
         let sa = SolidAdapter {
             username: u,
             password: p,
-            folder,
-            url: url,
+            folder: folder.trim_matches('/').to_string(),
+            url: url.trim_matches('/').to_string(),
             client: Client::builder().cookie_store(true).build()?,
-            cache: Mutex::new(RefCell::new(LruCache::<String, String>::new(1024))),
+            cache: Mutex::new(RefCell::new(LruCache::<String, Vec<u8>>::new(1024))),
             disk_cache_dir,
         };
         sa.authenticate()?;
+        sa.ensure_container_exists().expect("failed_to_create_or_access_container");
         Ok(sa)
     }
 
@@ -94,23 +96,32 @@ impl SolidAdapter {
         }
     }
 
-    fn fetch_object(&self, key: &str) -> Result<String> {
+    fn fetch_object(&self, key: &str) -> Result<Vec<u8>> {
         let cache = self.cache.lock().unwrap();
         let mut cache = cache.borrow_mut();
         match cache.get(&key.to_string()) {
-            Some(v) => Ok(v.clone()),
+            Some(v) => {
+                eprintln!("Fetching from memory cache {} {:?}", key, v);
+                Ok(v.clone())
+            },
             None => {
                 // Try to read from disk cache
                 match cacache::read_sync(&self.disk_cache_dir, key) {
-                    Ok(data) => Ok(String::from_utf8_lossy(&data).into_owned()),
+                    Ok(data) => {
+                        eprintln!("Fetching from disk cache");
+                        Ok(data)
+                    },
                     Err(_) => {
+                        eprintln!("Fetching from pod");
                         let (_, url) = self.get_object_url(key)?;
-                        let response = self.client.get(url).send()?;
+                        let mut headers = HeaderMap::new();
+                        headers.insert("Content-Type", "application/octet-stream".parse().unwrap());
+                        let response = self.client.get(url).headers(headers).send()?;
                         if response.status().as_u16() == 200 {
-                            let data = response.text()?;
-                            cache.put(key.to_string(), data.clone());
-                            cacache::write_sync(&self.disk_cache_dir, key, data.as_bytes())?;
-                            Ok(data)
+                            let data = response.bytes()?;
+                            cache.put(key.to_string(), data.to_vec());
+                            cacache::write_sync(&self.disk_cache_dir, key, data.to_vec())?;
+                            Ok(data.to_vec())
                         } else {
                             bail!("cannot_read_object")
                         }
@@ -119,16 +130,61 @@ impl SolidAdapter {
             }
         }
     }
+    
+    fn ensure_container_exists(&self) -> Result<()> {
+        let url = self.url.clone() + "/" + self.folder.as_str();
+        let response = self.client.head(url.clone()).send()?;
+        if response.status().as_u16() != 200 {
+        let mut headers = HeaderMap::new();
+        headers.insert("Content-Type", "text/turtle".parse().unwrap());
+        headers.insert(
+            "Link",
+            "<http://www.w3.org/ns/ldp#BasicContainer>; rel=\"type\""
+                .parse()
+                .unwrap(),
+        );
+        headers.insert("Slug", self.folder.parse().unwrap());
+
+        let response = self.client.post(self.url.clone()).headers(headers).send()?;
+        if response.status().as_u16() != 201 && response.status().as_u16() != 409 {
+            bail!("cannot_ensure_sub_container_exists");
+        }
+    }
+        Ok(())
+    }
+
+    pub fn delete_container(&self) -> Result<()> {
+        let items = self.list_objects("")?;
+        let mut prefixes = BTreeSet::new();
+        for item in items {
+            let (prefix, object_url) = self.get_object_url(&item)?;
+            let _response = self.client.delete(object_url).send()?;
+            prefixes.insert(prefix);
+        }
+        for prefix in prefixes {
+            let prefix_url = self.url.clone() + "/" + self.folder.as_str() + "/" + &prefix;
+            let _response = self.client.delete(prefix_url).send()?;
+        }
+        let container_url = self.url.clone() + "/" + self.folder.as_str();
+        let _response = self.client.delete(container_url).send()?;
+        Ok(())
+    }
+
+    pub fn reset_container(&self) -> Result<()> {
+        self.delete_container()?;
+        self.ensure_container_exists()?;
+        Ok(())
+    }
 
     fn get_object_url(&self, key: &str) -> Result<(String, Url)> {
         let prefix = &key[..2];
-        let objecturl = self.url.clone() + self.folder.as_str() + &prefix + "/" + key;
+        let objecturl = self.url.clone() + "/" + self.folder.as_str() + "/" + &prefix + "/" + key;
         Ok((prefix.to_string(), Url::parse(&objecturl)?))
     }
 
-    fn ensure_container_exists(&self, key: &str) -> Result<Url> {
+    fn ensure_sub_container_exists(&self, key: &str) -> Result<Url> {
         let (prefix, object_url) = self.get_object_url(key)?;
-        let base_url = self.url.clone() + self.folder.as_str();
+        let base_url = self.url.clone() + "/" + self.folder.as_str();
         let response = self.client.head(base_url.clone()).send()?;
         if response.status().as_u16() != 200 {
             let mut headers = HeaderMap::new();
@@ -142,7 +198,7 @@ impl SolidAdapter {
             headers.insert("Slug", prefix.parse().unwrap());
             let response = self.client.post(base_url).headers(headers).send()?;
             if response.status().as_u16() != 201 && response.status().as_u16() != 409 {
-                bail!("cannot_ensure_container_exists");
+                bail!("cannot_ensure_sub_container_exists");
             }
         }
         Ok(object_url)
@@ -213,9 +269,9 @@ impl Adapter for SolidAdapter {
     fn read_object(&self, key: &str, offset: usize, length: usize) -> Result<Vec<u8>> {
         let data = self.fetch_object(key)?;
         if offset == 0 && length == 0 {
-            Ok(data.as_bytes().to_vec())
+            Ok(data)
         } else {
-            Ok(data.as_bytes()[offset..offset + length].to_vec())
+            Ok(data[offset..offset + length].to_vec())
         }
     }
 
@@ -223,20 +279,20 @@ impl Adapter for SolidAdapter {
         let cache = self.cache.lock().unwrap();
         let mut cache = cache.borrow_mut();
         if !cache.contains(&key.to_string()) {
-            let url = self.ensure_container_exists(key)?;
+            let url = self.ensure_sub_container_exists(key)?;
             let response = self.client.head(url.clone()).send()?;
             if response.status().as_u16() != 200 {
                 let mut headers = HeaderMap::new();
                 headers.insert("Content-Type", "application/octet-stream".parse().unwrap());
                 let response = self
                     .client
-                    .put(url)
+                    .put(url.clone())
                     .headers(headers)
                     .body(data.to_vec())
                     .send()?;
                 if response.status().as_u16() >= 200 || response.status().as_u16() <= 204 {
-                    cache.put(key.to_string(), String::from_utf8_lossy(&data).into_owned());
-                    cacache::write_sync(&self.disk_cache_dir, key, data)?;
+                    cache.put(key.to_string(), data.to_vec());
+                    cacache::write_sync(&self.disk_cache_dir, key, data.to_vec())?;
                 } else {
                     bail!("cannot_write_object");
                 }
@@ -247,14 +303,250 @@ impl Adapter for SolidAdapter {
 
     fn list_objects(&self, ext: &str) -> Result<Vec<String>> {
         let mut list = vec![];
-        let target = self.url.clone() + self.folder.as_str();
+        let target = self.url.clone() + "/" + self.folder.as_str();
         for sub in self.list_container("", &target, ResourceType::Folder)? {
-            let target = self.url.clone() + self.folder.as_str() + &sub;
+            let target = self.url.clone() + "/" + self.folder.as_str() + "/" + &sub;
             let mut partial = self
                 .list_container(ext, &target, ResourceType::File)
-                .unwrap();
+                .unwrap();              
             list.append(&mut partial);
         }
         Ok(list)
     }
 }
+
+mod tests {
+    #[allow(unused_imports)]
+    use serial_test::serial;
+
+    #[allow(unused_imports)]
+    use crate::{adapter::Adapter, flate2adapter::Flate2Adapter, memoryadapter::MemoryAdapter, solidadapter::SolidAdapter};
+
+    #[allow(dead_code)]
+    fn check_env() {
+        assert!(std::env::var("MELDA_SOLID_URL").is_ok());
+        assert!(std::env::var("MELDA_SOLID_USERNAME").is_ok());
+        assert!(std::env::var("MELDA_SOLID_PASSWORD").is_ok());
+        assert!(std::env::var("MELDA_SOLID_FOLDER").is_ok());
+    }
+
+    #[test]
+    #[serial]
+    fn test_solid_read_object_flate() {
+        check_env();
+        let url = std::env::var("MELDA_SOLID_URL").expect("MELDA_SOLID_URL not set");
+        let folder = std::env::var("MELDA_SOLID_FOLDER").expect("MELDA_SOLID_FOLDER not set");
+        let sa = SolidAdapter::new(url, folder, None, None).expect("Failed to create adapter");
+        sa.reset_container().expect("Failed to reset container");
+        let ma: Box<dyn Adapter> = Box::new(sa);
+        let sqa = Flate2Adapter::new(std::sync::Arc::new(std::sync::RwLock::new(ma)));
+        assert!(sqa.list_objects(".delta").unwrap().is_empty());
+        assert!(sqa
+            .write_object("somekey.delta", "somedata".as_bytes())
+            .is_ok());
+        eprintln!("{:?}", sqa.list_objects(".delta").unwrap());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        let ro = sqa.read_object("somekey.delta", 0, 0);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        eprintln!("Written {:?}, read {:?} ?", "somedata".as_bytes(), ro);
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "somedata");
+        let ro = sqa.read_object("somekey.delta", 1, 2);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "om");
+    }
+
+    #[test]
+    #[serial]
+    fn test_solid_write_object_flate() {
+        check_env();
+        let url = std::env::var("MELDA_SOLID_URL").expect("MELDA_SOLID_URL not set");
+        let folder = std::env::var("MELDA_SOLID_FOLDER").expect("MELDA_SOLID_FOLDER not set");
+        let sa = SolidAdapter::new(url, folder, None, None).expect("Failed to create adapter");
+        sa.reset_container().expect("Failed to reset container");
+        let ma: Box<dyn Adapter> = Box::new(sa);
+        let sqa = Flate2Adapter::new(std::sync::Arc::new(std::sync::RwLock::new(ma)));
+        assert!(sqa.list_objects(".delta").unwrap().is_empty());
+        assert!(sqa
+            .write_object("somekey.delta", "somedata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        let ro = sqa.read_object("somekey.delta", 0, 0);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "somedata");
+        // Add some other data
+        assert!(sqa
+            .write_object("somekey.pack", "otherdata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa.list_objects(".pack").unwrap().len() == 1);
+        assert!(sqa.list_objects("").unwrap().len() == 2);
+        let ro = sqa.read_object("somekey.pack", 0, 0);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "otherdata");
+        // Do not overwrite if already existing
+        assert!(sqa
+            .write_object("somekey.pack", "updateddata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa.list_objects(".pack").unwrap().len() == 1);
+        assert!(sqa.list_objects("").unwrap().len() == 2);
+        let ro = sqa.read_object("somekey.pack", 0, 0);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "otherdata");
+    }
+
+    #[test]
+    #[serial]
+    fn test_solid_list_objects_flate() {
+        check_env();
+        let url = std::env::var("MELDA_SOLID_URL").expect("MELDA_SOLID_URL not set");
+        let folder = std::env::var("MELDA_SOLID_FOLDER").expect("MELDA_SOLID_FOLDER not set");
+        let sa = SolidAdapter::new(url, folder, None, None).expect("Failed to create adapter");
+        sa.reset_container().expect("Failed to reset container");
+        let ma: Box<dyn Adapter> = Box::new(sa);
+        let sqa = Flate2Adapter::new(std::sync::Arc::new(std::sync::RwLock::new(ma)));
+        assert!(sqa.list_objects(".delta").unwrap().is_empty());
+        assert!(sqa
+            .write_object("somekey.delta", "somedata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa
+            .write_object("somekey.pack", "otherdata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa.list_objects(".pack").unwrap().len() == 1);
+        assert!(sqa.list_objects("").unwrap().len() == 2);
+        assert!(sqa
+            .write_object("somekey.delta", "somedata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa
+            .write_object("somekey.pack", "otherdata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa.list_objects(".pack").unwrap().len() == 1);
+        assert!(sqa.list_objects("").unwrap().len() == 2);
+    }
+
+    #[test]
+    #[serial]
+    fn test_solid_read_object() {
+        check_env();
+        let url = std::env::var("MELDA_SOLID_URL").expect("MELDA_SOLID_URL not set");
+        let folder = std::env::var("MELDA_SOLID_FOLDER").expect("MELDA_SOLID_FOLDER not set");
+        let sqa = SolidAdapter::new(url, folder, None, None).expect("Failed to create adapter");
+        sqa.reset_container().expect("Failed to reset container");
+        assert!(sqa.list_objects(".delta").unwrap().is_empty());
+        assert!(sqa
+            .write_object("somekey.delta", "somedata".as_bytes())
+            .is_ok());
+        eprintln!("{:?}", sqa.list_objects(".delta").unwrap());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        let ro = sqa.read_object("somekey.delta", 0, 0);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "somedata");
+        let ro = sqa.read_object("somekey.delta", 1, 2);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "om");
+    }
+
+    #[test]
+    #[serial]
+    fn test_solid_write_object() {
+        check_env();
+        let url = std::env::var("MELDA_SOLID_URL").expect("MELDA_SOLID_URL not set");
+        let folder = std::env::var("MELDA_SOLID_FOLDER").expect("MELDA_SOLID_FOLDER not set");
+        let sqa = SolidAdapter::new(url, folder, None, None).expect("Failed to create adapter");
+        sqa.reset_container().expect("Failed to reset container");
+        assert!(sqa.list_objects(".delta").unwrap().is_empty());
+        assert!(sqa
+            .write_object("somekey.delta", "somedata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        let ro = sqa.read_object("somekey.delta", 0, 0);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "somedata");
+        // Add some other data
+        assert!(sqa
+            .write_object("somekey.pack", "otherdata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa.list_objects(".pack").unwrap().len() == 1);
+        assert!(sqa.list_objects("").unwrap().len() == 2);
+        let ro = sqa.read_object("somekey.pack", 0, 0);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "otherdata");
+        // Do not overwrite if already existing
+        assert!(sqa
+            .write_object("somekey.pack", "updateddata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa.list_objects(".pack").unwrap().len() == 1);
+        assert!(sqa.list_objects("").unwrap().len() == 2);
+        let ro = sqa.read_object("somekey.pack", 0, 0);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "otherdata");
+    }
+
+    #[test]
+    #[serial]
+    fn test_solid_list_objects() {
+        check_env();
+        let url = std::env::var("MELDA_SOLID_URL").expect("MELDA_SOLID_URL not set");
+        let folder = std::env::var("MELDA_SOLID_FOLDER").expect("MELDA_SOLID_FOLDER not set");
+        let sqa = SolidAdapter::new(url, folder, None, None).expect("Failed to create adapter");
+        sqa.reset_container().expect("Failed to reset container");
+        assert!(sqa.list_objects(".delta").unwrap().is_empty());
+        assert!(sqa
+            .write_object("somekey.delta", "somedata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa
+            .write_object("somekey.pack", "otherdata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa.list_objects(".pack").unwrap().len() == 1);
+        assert!(sqa.list_objects("").unwrap().len() == 2);
+        assert!(sqa
+            .write_object("somekey.delta", "somedata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa
+            .write_object("somekey.pack", "otherdata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa.list_objects(".pack").unwrap().len() == 1);
+        assert!(sqa.list_objects("").unwrap().len() == 2);
+    }
+}
+

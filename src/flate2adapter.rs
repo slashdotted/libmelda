@@ -33,7 +33,8 @@ impl Flate2Adapter {
 
 impl Adapter for Flate2Adapter {
     fn read_object(&self, key: &str, offset: usize, length: usize) -> Result<Vec<u8>> {
-        let data = self.backend.read().unwrap().read_object(key, 0, 0)?;
+        let key = key.to_string() +".flate"; // Change key to avoid mismatching cache objects
+        let data = self.backend.read().unwrap().read_object(&key, 0, 0)?;
         let mut d = DeflateDecoder::new(data.as_slice());
         let mut datavec = vec![];
         d.read_to_end(&mut datavec)?;
@@ -45,17 +46,20 @@ impl Adapter for Flate2Adapter {
     }
 
     fn write_object(&self, key: &str, data: &[u8]) -> Result<()> {
+        let key = key.to_string() +".flate"; // Change key to avoid mismatching cache objects
         let mut e = DeflateEncoder::new(Vec::new(), Compression::default());
         e.write_all(data)?;
         let compressed = e.finish().unwrap();
         self.backend
             .write()
             .unwrap()
-            .write_object(key, compressed.as_slice())
+            .write_object(&key, compressed.as_slice())
     }
 
     fn list_objects(&self, ext: &str) -> Result<Vec<String>> {
-        self.backend.read().unwrap().list_objects(ext)
+        let ext = ext.to_string() +".flate"; // Change key to avoid mismatching cache objects
+        let result = self.backend.read().unwrap().list_objects(&ext)?;
+        Ok(result.into_iter().map(|k| k.trim_end_matches(".flate").to_string()).collect())
     }
 }
 
