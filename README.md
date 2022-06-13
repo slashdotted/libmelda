@@ -13,6 +13,11 @@ First of all, in **Cargo.toml** add the following dependency
 ```
 melda = { git = "https://github.com/slashdotted/libmelda" }
 ```
+or
+
+```
+melda = "0.1.7"
+```
 
 Then import the required modules. For this example you will need:
 
