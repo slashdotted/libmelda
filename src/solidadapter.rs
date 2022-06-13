@@ -101,18 +101,15 @@ impl SolidAdapter {
         let mut cache = cache.borrow_mut();
         match cache.get(&key.to_string()) {
             Some(v) => {
-                eprintln!("Fetching from memory cache {} {:?}", key, v);
                 Ok(v.clone())
             },
             None => {
                 // Try to read from disk cache
                 match cacache::read_sync(&self.disk_cache_dir, key) {
                     Ok(data) => {
-                        eprintln!("Fetching from disk cache");
                         Ok(data)
                     },
                     Err(_) => {
-                        eprintln!("Fetching from pod");
                         let (_, url) = self.get_object_url(key)?;
                         let mut headers = HeaderMap::new();
                         headers.insert("Content-Type", "application/octet-stream".parse().unwrap());
@@ -344,13 +341,11 @@ mod tests {
         assert!(sqa
             .write_object("somekey.delta", "somedata".as_bytes())
             .is_ok());
-        eprintln!("{:?}", sqa.list_objects(".delta").unwrap());
         assert!(sqa.list_objects(".delta").unwrap().len() == 1);
         let ro = sqa.read_object("somekey.delta", 0, 0);
         assert!(ro.is_ok());
         let ro = ro.unwrap();
         assert!(!ro.is_empty());
-        eprintln!("Written {:?}, read {:?} ?", "somedata".as_bytes(), ro);
         let ro = String::from_utf8(ro).unwrap();
         assert!(ro == "somedata");
         let ro = sqa.read_object("somekey.delta", 1, 2);
