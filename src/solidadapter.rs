@@ -1,4 +1,4 @@
- // Melda - Delta State JSON CRDT
+// Melda - Delta State JSON CRDT
 // Copyright (C) 2021-2022 Amos Brocco <amos.brocco@supsi.ch>
 //
 // This program is free software: you can redistribute it and/or modify
@@ -30,6 +30,7 @@ use std::sync::Mutex;
 use std::{collections::HashMap, env};
 use url::Url;
 
+/// Implements storage in a Solid Pod
 pub struct SolidAdapter {
     username: String,
     password: String,
@@ -46,6 +47,16 @@ pub enum ResourceType {
 }
 
 impl SolidAdapter {
+    /// Creates a new adapter to store data in the specified Solid pod.
+    /// If no username or password are provided the MELDA_SOLID_USERNAME and
+    /// MELDA_SOLID_PASSWORD environment variables will be used.
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - URL of the Solid server
+    /// * `folder` - Folder path
+    /// * `username` - Optional username (for authentication on the server)
+    /// * `password` - Optional password (for authentication on the server)
     pub fn new(
         url: String,
         folder: String,
@@ -68,7 +79,7 @@ impl SolidAdapter {
             password.unwrap()
         } else {
             env::var("MELDA_SOLID_PASSWORD")?
-        };    
+        };
         let sa = SolidAdapter {
             username: u,
             password: p,
@@ -79,7 +90,8 @@ impl SolidAdapter {
             disk_cache_dir,
         };
         sa.authenticate()?;
-        sa.ensure_container_exists().expect("failed_to_create_or_access_container");
+        sa.ensure_container_exists()
+            .expect("failed_to_create_or_access_container");
         Ok(sa)
     }
 
@@ -100,15 +112,11 @@ impl SolidAdapter {
         let cache = self.cache.lock().unwrap();
         let mut cache = cache.borrow_mut();
         match cache.get(&key.to_string()) {
-            Some(v) => {
-                Ok(v.clone())
-            },
+            Some(v) => Ok(v.clone()),
             None => {
                 // Try to read from disk cache
                 match cacache::read_sync(&self.disk_cache_dir, key) {
-                    Ok(data) => {
-                        Ok(data)
-                    },
+                    Ok(data) => Ok(data),
                     Err(_) => {
                         let (_, url) = self.get_object_url(key)?;
                         let mut headers = HeaderMap::new();
@@ -127,29 +135,31 @@ impl SolidAdapter {
             }
         }
     }
-    
+
     fn ensure_container_exists(&self) -> Result<()> {
         let url = self.url.clone() + "/" + self.folder.as_str();
         let response = self.client.head(url.clone()).send()?;
         if response.status().as_u16() != 200 {
-        let mut headers = HeaderMap::new();
-        headers.insert("Content-Type", "text/turtle".parse().unwrap());
-        headers.insert(
-            "Link",
-            "<http://www.w3.org/ns/ldp#BasicContainer>; rel=\"type\""
-                .parse()
-                .unwrap(),
-        );
-        headers.insert("Slug", self.folder.parse().unwrap());
+            let mut headers = HeaderMap::new();
+            headers.insert("Content-Type", "text/turtle".parse().unwrap());
+            headers.insert(
+                "Link",
+                "<http://www.w3.org/ns/ldp#BasicContainer>; rel=\"type\""
+                    .parse()
+                    .unwrap(),
+            );
+            headers.insert("Slug", self.folder.parse().unwrap());
 
-        let response = self.client.post(self.url.clone()).headers(headers).send()?;
-        if response.status().as_u16() != 201 && response.status().as_u16() != 409 {
-            bail!("cannot_ensure_sub_container_exists");
+            let response = self.client.post(self.url.clone()).headers(headers).send()?;
+            if response.status().as_u16() != 201 && response.status().as_u16() != 409 {
+                bail!("cannot_ensure_sub_container_exists");
+            }
         }
-    }
         Ok(())
     }
 
+    /// Recursively deletes the container folder
+    /// 
     pub fn delete_container(&self) -> Result<()> {
         let items = self.list_objects("")?;
         let mut prefixes = BTreeSet::new();
@@ -167,6 +177,8 @@ impl SolidAdapter {
         Ok(())
     }
 
+    /// Recursively deletes the container folder and then recreates it
+    ///     
     pub fn reset_container(&self) -> Result<()> {
         self.delete_container()?;
         self.ensure_container_exists()?;
@@ -263,6 +275,15 @@ impl SolidAdapter {
 }
 
 impl Adapter for SolidAdapter {
+    /// Reads an object or a sub-object from the backend storage. When offset and length are both 0
+    /// the full object is returned, otherwise the sub-object is returned
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key associated with the object
+    /// * `offset` - The starting position of the sub-object in the associated data pack
+    /// * `length` - The length of the sub-object (in bytes) in the associated data pack
+    ///     
     fn read_object(&self, key: &str, offset: usize, length: usize) -> Result<Vec<u8>> {
         let data = self.fetch_object(key)?;
         if offset == 0 && length == 0 {
@@ -272,6 +293,12 @@ impl Adapter for SolidAdapter {
         }
     }
 
+    /// Writes an object to the storage
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key associated with the object
+    /// * `data` - The content of the object    
     fn write_object(&self, key: &str, data: &[u8]) -> Result<()> {
         let cache = self.cache.lock().unwrap();
         let mut cache = cache.borrow_mut();
@@ -298,6 +325,11 @@ impl Adapter for SolidAdapter {
         Ok(())
     }
 
+    /// Lists the keys of all objects whose key ends with ext. If ext is an empty string, all objects are returned.
+    ///
+    /// # Arguments
+    ///
+    /// * `ext` - The extension (last part of the string) of the requested objects     
     fn list_objects(&self, ext: &str) -> Result<Vec<String>> {
         let mut list = vec![];
         let target = self.url.clone() + "/" + self.folder.as_str();
@@ -305,7 +337,7 @@ impl Adapter for SolidAdapter {
             let target = self.url.clone() + "/" + self.folder.as_str() + "/" + &sub;
             let mut partial = self
                 .list_container(ext, &target, ResourceType::File)
-                .unwrap();              
+                .unwrap();
             list.append(&mut partial);
         }
         Ok(list)
@@ -317,7 +349,10 @@ mod tests {
     use serial_test::serial;
 
     #[allow(unused_imports)]
-    use crate::{adapter::Adapter, flate2adapter::Flate2Adapter, memoryadapter::MemoryAdapter, solidadapter::SolidAdapter};
+    use crate::{
+        adapter::Adapter, flate2adapter::Flate2Adapter, memoryadapter::MemoryAdapter,
+        solidadapter::SolidAdapter,
+    };
 
     #[allow(dead_code)]
     fn check_env() {
@@ -544,4 +579,3 @@ mod tests {
         assert!(sqa.list_objects("").unwrap().len() == 2);
     }
 }
-

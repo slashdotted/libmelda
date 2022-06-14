@@ -102,7 +102,7 @@ Up until this point we only considered some JSON data, but we have yet to see ho
 
 ## Adapters
 
-Melda implements a modular design where the logic of the CRDT is separated from the data storage. Storing the data (in our case, delta states) is achieved by means of **Adapters**. Melda already provides different types of adapters, supporting in-memory storage (**MemoryAdapter**), filesystem storage (**FilesystemAdapter**) and Solid Pods (**SolidAdapter**). Furthermore, it is possible to use a meta-adapter to compress data using the Flate2 algorithm (**Flate2Adapter**): such an adapter can be composed with other adapters.
+Melda implements a modular design where the logic of the CRDT is separated from the data storage. Storing the data (in our case, delta states) is achieved by means of **Adapters**. Melda already provides different types of adapters, supporting in-memory storage (**MemoryAdapter**), a folder in the filesystem (**FilesystemAdapter**), a SQLite database (**SQLiteAdapter**), and a Solid Pod (**SolidAdapter**). Furthermore, it is possible to use a meta-adapter to compress data using the Flate2 algorithm (**Flate2Adapter**): other adapters can be composed with the **Flate2Adapter** to store compressed data on the chosen backend.
 
 We can initialize an adapter that will store data on the filesystem (in the **todolist** directory) as follows (**FilesystemAdapter**):
 ```rust

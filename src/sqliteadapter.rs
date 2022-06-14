@@ -17,11 +17,17 @@ use crate::adapter::Adapter;
 use anyhow::Result;
 use std::{cell::RefCell, sync::Mutex};
 
+/// Implements storage in a SQLite database
 pub struct SqliteAdapter {
     cn: Mutex<RefCell<rusqlite::Connection>>,
 }
 
 impl SqliteAdapter {
+    /// Creates a new adapter to store data in a SQLite database (on disk).
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Database name  
     pub fn new(name: &str) -> Self {
         let bk = SqliteAdapter {
             cn: Mutex::new(RefCell::new(rusqlite::Connection::open(name).unwrap())),
@@ -38,6 +44,8 @@ impl SqliteAdapter {
         bk
     }
 
+    /// Creates a new adapter to store data in a in-memory SQLite database.
+    ///
     pub fn new_in_memory() -> Self {
         let bk = SqliteAdapter {
             cn: Mutex::new(RefCell::new(
@@ -58,6 +66,15 @@ impl SqliteAdapter {
 }
 
 impl Adapter for SqliteAdapter {
+    /// Reads an object or a sub-object from the backend storage. When offset and length are both 0
+    /// the full object is returned, otherwise the sub-object is returned
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key associated with the object
+    /// * `offset` - The starting position of the sub-object in the associated data pack
+    /// * `length` - The length of the sub-object (in bytes) in the associated data pack
+    ///     
     fn read_object(&self, key: &str, offset: usize, length: usize) -> Result<Vec<u8>> {
         let mcn = self.cn.lock().unwrap();
         let cn = mcn.borrow();
@@ -66,7 +83,7 @@ impl Adapter for SqliteAdapter {
             .unwrap();
         let result = stmt.query_row(&[&key], |row| {
             let data: String = row.get(0)?;
-            let data: Vec<u8> = data.as_bytes().iter().map(|c| *c as u8).collect::<Vec<_>>();
+            let data = base64::decode(data).expect("cannot_decode_data");
             if offset == 0 && length == 0 {
                 Ok(data)
             } else {
@@ -79,10 +96,16 @@ impl Adapter for SqliteAdapter {
         }
     }
 
+    /// Writes an object to the storage
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key associated with the object
+    /// * `data` - The content of the object    
     fn write_object(&self, key: &str, data: &[u8]) -> Result<()> {
         let mcn = self.cn.lock().unwrap();
         let cn = mcn.borrow_mut();
-        let value = String::from_utf8(data.to_vec()).unwrap();
+        let value = base64::encode(data);
         match cn.execute(
             "INSERT OR IGNORE INTO entries (key, value) VALUES (?1,?2)",
             &[&key, &value.as_str()],
@@ -92,6 +115,11 @@ impl Adapter for SqliteAdapter {
         }
     }
 
+    /// Lists the keys of all objects whose key ends with ext. If ext is an empty string, all objects are returned.
+    ///
+    /// # Arguments
+    ///
+    /// * `ext` - The extension (last part of the string) of the requested objects     
     fn list_objects(&self, ext: &str) -> Result<Vec<String>> {
         let mcn = self.cn.lock().unwrap();
         let cn = mcn.borrow();
@@ -113,12 +141,108 @@ impl Adapter for SqliteAdapter {
 
 #[cfg(test)]
 mod tests {
-    use crate::adapter::Adapter;
+    use crate::{adapter::Adapter, flate2adapter::Flate2Adapter};
 
     use super::SqliteAdapter;
 
     #[test]
-    fn test_read_object() {
+    fn test_sqlite_read_object_flate() {
+        let sa = SqliteAdapter::new_in_memory();
+        let ma: Box<dyn Adapter> = Box::new(sa);
+        let sqa = Flate2Adapter::new(std::sync::Arc::new(std::sync::RwLock::new(ma)));
+        assert!(sqa.list_objects(".delta").unwrap().is_empty());
+        assert!(sqa
+            .write_object("somekey.delta", "somedata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        let ro = sqa.read_object("somekey.delta", 0, 0);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "somedata");
+        let ro = sqa.read_object("somekey.delta", 1, 2);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "om");
+    }
+
+    #[test]
+    fn test_solid_write_object_flate() {
+        let sa = SqliteAdapter::new_in_memory();
+        let ma: Box<dyn Adapter> = Box::new(sa);
+        let sqa = Flate2Adapter::new(std::sync::Arc::new(std::sync::RwLock::new(ma)));
+        assert!(sqa.list_objects(".delta").unwrap().is_empty());
+        assert!(sqa
+            .write_object("somekey.delta", "somedata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        let ro = sqa.read_object("somekey.delta", 0, 0);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "somedata");
+        // Add some other data
+        assert!(sqa
+            .write_object("somekey.pack", "otherdata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa.list_objects(".pack").unwrap().len() == 1);
+        assert!(sqa.list_objects("").unwrap().len() == 2);
+        let ro = sqa.read_object("somekey.pack", 0, 0);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "otherdata");
+        // Do not overwrite if already existing
+        assert!(sqa
+            .write_object("somekey.pack", "updateddata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa.list_objects(".pack").unwrap().len() == 1);
+        assert!(sqa.list_objects("").unwrap().len() == 2);
+        let ro = sqa.read_object("somekey.pack", 0, 0);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "otherdata");
+    }
+
+    #[test]
+    fn test_sqlite_list_objects_flate() {
+        let sa = SqliteAdapter::new_in_memory();
+        let ma: Box<dyn Adapter> = Box::new(sa);
+        let sqa = Flate2Adapter::new(std::sync::Arc::new(std::sync::RwLock::new(ma)));
+        assert!(sqa.list_objects(".delta").unwrap().is_empty());
+        assert!(sqa
+            .write_object("somekey.delta", "somedata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa
+            .write_object("somekey.pack", "otherdata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa.list_objects(".pack").unwrap().len() == 1);
+        assert!(sqa.list_objects("").unwrap().len() == 2);
+        assert!(sqa
+            .write_object("somekey.delta", "somedata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa
+            .write_object("somekey.pack", "otherdata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa.list_objects(".pack").unwrap().len() == 1);
+        assert!(sqa.list_objects("").unwrap().len() == 2);
+    }
+
+    #[test]
+    fn test_sqlite_read_object() {
         let sqa = SqliteAdapter::new_in_memory();
         assert!(sqa.list_objects(".delta").unwrap().is_empty());
         assert!(sqa
@@ -140,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn test_write_object() {
+    fn test_sqlite_write_object() {
         let sqa = SqliteAdapter::new_in_memory();
         assert!(sqa.list_objects(".delta").unwrap().is_empty());
         assert!(sqa
@@ -182,7 +306,7 @@ mod tests {
     }
 
     #[test]
-    fn test_list_objects() {
+    fn test_sqlite_list_objects() {
         let sqa = SqliteAdapter::new_in_memory();
         assert!(sqa.list_objects(".delta").unwrap().is_empty());
         assert!(sqa

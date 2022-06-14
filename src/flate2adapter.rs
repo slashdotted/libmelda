@@ -21,19 +21,34 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+/// Implements compressed storage (using DEFLATE) on other adapters
 pub struct Flate2Adapter {
     backend: Arc<RwLock<Box<dyn Adapter>>>,
 }
 
 impl Flate2Adapter {
+    /// Creates a new adapter wrapping the specified adapter
+    ///
+    /// # Arguments
+    ///
+    /// * `backend` - The adapter to be wrapped
     pub fn new(backend: Arc<RwLock<Box<dyn Adapter>>>) -> Self {
         Flate2Adapter { backend }
     }
 }
 
 impl Adapter for Flate2Adapter {
+    /// Reads an object or a sub-object from the backend storage. When offset and length are both 0
+    /// the full object is returned, otherwise the sub-object is returned
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key associated with the object
+    /// * `offset` - The starting position of the sub-object in the associated data pack
+    /// * `length` - The length of the sub-object (in bytes) in the associated data pack
+    ///     
     fn read_object(&self, key: &str, offset: usize, length: usize) -> Result<Vec<u8>> {
-        let key = key.to_string() +".flate"; // Change key to avoid mismatching cache objects
+        let key = key.to_string() + ".flate"; // Change key to avoid mismatching cache objects
         let data = self.backend.read().unwrap().read_object(&key, 0, 0)?;
         let mut d = DeflateDecoder::new(data.as_slice());
         let mut datavec = vec![];
@@ -45,8 +60,14 @@ impl Adapter for Flate2Adapter {
         }
     }
 
+    /// Writes an object to the storage
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key associated with the object
+    /// * `data` - The content of the object    
     fn write_object(&self, key: &str, data: &[u8]) -> Result<()> {
-        let key = key.to_string() +".flate"; // Change key to avoid mismatching cache objects
+        let key = key.to_string() + ".flate"; // Change key to avoid mismatching cache objects
         let mut e = DeflateEncoder::new(Vec::new(), Compression::default());
         e.write_all(data)?;
         let compressed = e.finish().unwrap();
@@ -56,10 +77,18 @@ impl Adapter for Flate2Adapter {
             .write_object(&key, compressed.as_slice())
     }
 
+    /// Lists the keys of all objects whose key ends with ext. If ext is an empty string, all objects are returned.
+    ///
+    /// # Arguments
+    ///
+    /// * `ext` - The extension (last part of the string) of the requested objects     
     fn list_objects(&self, ext: &str) -> Result<Vec<String>> {
-        let ext = ext.to_string() +".flate"; // Change key to avoid mismatching cache objects
+        let ext = ext.to_string() + ".flate"; // Change key to avoid mismatching cache objects
         let result = self.backend.read().unwrap().list_objects(&ext)?;
-        Ok(result.into_iter().map(|k| k.trim_end_matches(".flate").to_string()).collect())
+        Ok(result
+            .into_iter()
+            .map(|k| k.trim_end_matches(".flate").to_string())
+            .collect())
     }
 }
 

@@ -22,11 +22,17 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Implements storage in a folder on the filesystem
 pub struct FilesystemAdapter {
     path: PathBuf,
 }
 
 impl FilesystemAdapter {
+    /// Creates a new adapter to store data in the specified directory
+    ///
+    /// # Arguments
+    ///
+    /// * `dir` - The path to the directory where data is to be saved to (if the directory does not exist it will be crated)
     pub fn new(dir: &str) -> Result<FilesystemAdapter, &str> {
         let dp = Path::new(dir);
         if !dp.exists() {
@@ -65,6 +71,15 @@ impl FilesystemAdapter {
 }
 
 impl Adapter for FilesystemAdapter {
+    /// Reads an object or a sub-object from the backend storage. When offset and length are both 0
+    /// the full object is returned, otherwise the sub-object is returned
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key associated with the object
+    /// * `offset` - The starting position of the sub-object in the associated data pack
+    /// * `length` - The length of the sub-object (in bytes) in the associated data pack
+    ///
     fn read_object(&self, key: &str, offset: usize, length: usize) -> Result<Vec<u8>> {
         let (_, filepath) = self.get_object_path(key)?;
         if length == 0 {
@@ -86,6 +101,12 @@ impl Adapter for FilesystemAdapter {
         }
     }
 
+    /// Writes an object to the storage
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key associated with the object
+    /// * `data` - The content of the object    
     fn write_object(&self, key: &str, data: &[u8]) -> Result<()> {
         let (_, filepath) = self.ensure_container_exists(key)?;
         if !filepath.exists() {
@@ -96,6 +117,11 @@ impl Adapter for FilesystemAdapter {
         Ok(())
     }
 
+    /// Lists the keys of all objects whose key ends with ext. If ext is an empty string, all objects are returned.
+    ///
+    /// # Arguments
+    ///
+    /// * `ext` - The extension (last part of the string) of the requested objects     
     fn list_objects(&self, ext: &str) -> Result<Vec<String>> {
         let content = read_dir(self.path.clone())?;
         let mut result = vec![];
@@ -129,5 +155,213 @@ impl Adapter for FilesystemAdapter {
         } else {
             Ok(result)
         }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use mktemp::Temp;
+
+    use crate::{adapter::Adapter, flate2adapter::Flate2Adapter};
+
+    use super::FilesystemAdapter;
+
+    #[test]
+    fn test_filesystem_read_object_flate() {
+        let temp = Temp::new_dir().unwrap();
+        let path_buf = temp.to_path_buf();
+        let sa = FilesystemAdapter::new(path_buf.to_str().unwrap()).unwrap();
+        let ma: Box<dyn Adapter> = Box::new(sa);
+        let sqa = Flate2Adapter::new(std::sync::Arc::new(std::sync::RwLock::new(ma)));
+        assert!(sqa.list_objects(".delta").unwrap().is_empty());
+        assert!(sqa
+            .write_object("somekey.delta", "somedata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        let ro = sqa.read_object("somekey.delta", 0, 0);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "somedata");
+        let ro = sqa.read_object("somekey.delta", 1, 2);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "om");
+    }
+
+    #[test]
+    fn test_filesystem_write_object_flate() {
+        let temp = Temp::new_dir().unwrap();
+        let path_buf = temp.to_path_buf();
+        let sa = FilesystemAdapter::new(path_buf.to_str().unwrap()).unwrap();
+        let ma: Box<dyn Adapter> = Box::new(sa);
+        let sqa = Flate2Adapter::new(std::sync::Arc::new(std::sync::RwLock::new(ma)));
+        assert!(sqa.list_objects(".delta").unwrap().is_empty());
+        assert!(sqa
+            .write_object("somekey.delta", "somedata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        let ro = sqa.read_object("somekey.delta", 0, 0);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "somedata");
+        // Add some other data
+        assert!(sqa
+            .write_object("somekey.pack", "otherdata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa.list_objects(".pack").unwrap().len() == 1);
+        assert!(sqa.list_objects("").unwrap().len() == 2);
+        let ro = sqa.read_object("somekey.pack", 0, 0);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "otherdata");
+        // Do not overwrite if already existing
+        assert!(sqa
+            .write_object("somekey.pack", "updateddata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa.list_objects(".pack").unwrap().len() == 1);
+        assert!(sqa.list_objects("").unwrap().len() == 2);
+        let ro = sqa.read_object("somekey.pack", 0, 0);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "otherdata");
+    }
+
+    #[test]
+    fn test_filesystem_list_objects_flate() {
+        let temp = Temp::new_dir().unwrap();
+        let path_buf = temp.to_path_buf();
+        let sa = FilesystemAdapter::new(path_buf.to_str().unwrap()).unwrap();
+        let ma: Box<dyn Adapter> = Box::new(sa);
+        let sqa = Flate2Adapter::new(std::sync::Arc::new(std::sync::RwLock::new(ma)));
+        assert!(sqa.list_objects(".delta").unwrap().is_empty());
+        assert!(sqa
+            .write_object("somekey.delta", "somedata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa
+            .write_object("somekey.pack", "otherdata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa.list_objects(".pack").unwrap().len() == 1);
+        assert!(sqa.list_objects("").unwrap().len() == 2);
+        assert!(sqa
+            .write_object("somekey.delta", "somedata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa
+            .write_object("somekey.pack", "otherdata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa.list_objects(".pack").unwrap().len() == 1);
+        assert!(sqa.list_objects("").unwrap().len() == 2);
+    }
+
+    #[test]
+    fn test_filesystem_read_object() {
+        let temp = Temp::new_dir().unwrap();
+        let path_buf = temp.to_path_buf();
+        let sqa = FilesystemAdapter::new(path_buf.to_str().unwrap()).unwrap();
+        assert!(sqa.list_objects(".delta").unwrap().is_empty());
+        assert!(sqa
+            .write_object("somekey.delta", "somedata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        let ro = sqa.read_object("somekey.delta", 0, 0);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "somedata");
+        let ro = sqa.read_object("somekey.delta", 1, 2);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "om");
+    }
+
+    #[test]
+    fn test_filesystem_write_object() {
+        let temp = Temp::new_dir().unwrap();
+        let path_buf = temp.to_path_buf();
+        let sqa = FilesystemAdapter::new(path_buf.to_str().unwrap()).unwrap();
+        assert!(sqa.list_objects(".delta").unwrap().is_empty());
+        assert!(sqa
+            .write_object("somekey.delta", "somedata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        let ro = sqa.read_object("somekey.delta", 0, 0);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "somedata");
+        // Add some other data
+        assert!(sqa
+            .write_object("somekey.pack", "otherdata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa.list_objects(".pack").unwrap().len() == 1);
+        assert!(sqa.list_objects("").unwrap().len() == 2);
+        let ro = sqa.read_object("somekey.pack", 0, 0);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "otherdata");
+        // Do not overwrite if already existing
+        assert!(sqa
+            .write_object("somekey.pack", "updateddata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa.list_objects(".pack").unwrap().len() == 1);
+        assert!(sqa.list_objects("").unwrap().len() == 2);
+        let ro = sqa.read_object("somekey.pack", 0, 0);
+        assert!(ro.is_ok());
+        let ro = ro.unwrap();
+        assert!(!ro.is_empty());
+        let ro = String::from_utf8(ro).unwrap();
+        assert!(ro == "otherdata");
+    }
+
+    #[test]
+    fn test_filesystem_list_objects() {
+        let temp = Temp::new_dir().unwrap();
+        let path_buf = temp.to_path_buf();
+        let sqa = FilesystemAdapter::new(path_buf.to_str().unwrap()).unwrap();
+        assert!(sqa.list_objects(".delta").unwrap().is_empty());
+        assert!(sqa
+            .write_object("somekey.delta", "somedata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa
+            .write_object("somekey.pack", "otherdata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa.list_objects(".pack").unwrap().len() == 1);
+        assert!(sqa.list_objects("").unwrap().len() == 2);
+        assert!(sqa
+            .write_object("somekey.delta", "somedata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa
+            .write_object("somekey.pack", "otherdata".as_bytes())
+            .is_ok());
+        assert!(sqa.list_objects(".delta").unwrap().len() == 1);
+        assert!(sqa.list_objects(".pack").unwrap().len() == 1);
+        assert!(sqa.list_objects("").unwrap().len() == 2);
     }
 }
