@@ -158,7 +158,6 @@ impl Adapter for FilesystemAdapter {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use mktemp::Temp;

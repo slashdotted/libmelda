@@ -53,11 +53,11 @@ impl DataStorage {
     /// Constructs a new Data storage based on the provided adapter
     pub fn new(adapter: Arc<RwLock<Box<dyn Adapter>>>) -> DataStorage {
         let cache_size = std::env::var("MELDA_DATA_CACHE_CAP")
-            .unwrap_or("16".to_string())
+            .unwrap_or_else(|_| "16".to_string())
             .parse::<u32>()
             .unwrap() as usize;
         let full_array_interval = std::env::var("MELDA_FORCE_FULL_ARRAY_INTERVAL")
-            .unwrap_or("1000".to_string())
+            .unwrap_or_else(|_| "1000".to_string())
             .parse::<u32>()
             .unwrap();
         DataStorage {
@@ -74,22 +74,36 @@ impl DataStorage {
 
     /// Merges another DataStorage into this one
     pub fn merge(&mut self, other: &DataStorage) -> Result<()> {
-        for (digest, _) in &other.objects {
+        other.objects.keys().for_each(|digest| {
             if !self.objects.contains_key(digest) && !self.stage.contains_key(digest) {
-                self.write_data(digest, other.read_data(digest)?.unwrap())?;
+                self.write_data(
+                    digest,
+                    other
+                        .read_data(digest)
+                        .expect("failed_to_read_data")
+                        .expect("no_data"),
+                )
+                .expect("failed_to_write_data");
             }
-        }
-        for (digest, _) in &other.stage {
+        });
+        other.stage.keys().for_each(|digest| {
             if !self.objects.contains_key(digest) && !self.stage.contains_key(digest) {
-                self.write_data(digest, other.read_data(digest)?.unwrap())?;
+                self.write_data(
+                    digest,
+                    other
+                        .read_data(digest)
+                        .expect("failed_to_read_data")
+                        .expect("no_data"),
+                )
+                .expect("failed_to_write_data");
             }
-        }
+        });
         Ok(())
     }
 
     /// Loads a pack file (and rebuilds the index)
-    fn load_pack(&mut self, pack: &String) -> Result<()> {
-        let object = pack.clone() + PACK_EXTENSION;
+    fn load_pack(&mut self, pack: &str) -> Result<()> {
+        let object = pack.to_string() + PACK_EXTENSION;
         let data = self
             .adapter
             .read()
@@ -99,7 +113,7 @@ impl DataStorage {
     }
 
     /// Data is the raw string (we need to compute the offset and length of the object)
-    fn load_pack_data(&mut self, name: &String, data: &Vec<u8>) -> Result<()> {
+    fn load_pack_data(&mut self, name: &str, data: &[u8]) -> Result<()> {
         let mut flag = 0;
         let mut obj_start = 0;
         for (offset, c) in data.iter().enumerate() {
@@ -114,7 +128,7 @@ impl DataStorage {
                     let digest = digest_bytes(&data[obj_start..offset + 1]);
                     let count = offset + 1 - obj_start;
                     self.objects
-                        .insert(digest, (name.clone(), obj_start, count));
+                        .insert(digest, (name.to_string(), obj_start, count));
                 };
             }
         }
@@ -122,20 +136,20 @@ impl DataStorage {
     }
 
     /// Loads an index object
-    fn load_index_object(&mut self, index: &String, obj: &Map<String, Value>) -> Result<()> {
+    fn load_index_object(&mut self, index: &str, obj: &Map<String, Value>) -> Result<()> {
         for (k, v) in obj {
             let d = v.as_array().unwrap();
             let offset = d[0].as_i64().unwrap() as usize;
             let count = d[1].as_i64().unwrap() as usize;
             self.objects
-                .insert(k.clone(), (index.clone(), offset, count));
+                .insert(k.clone(), (index.to_string(), offset, count));
         }
         Ok(())
     }
 
     /// Loads an index file
-    fn load_index(&mut self, index: &String) -> Result<()> {
-        let object = index.clone() + INDEX_EXTENSION;
+    fn load_index(&mut self, index: &str) -> Result<()> {
+        let object = index.to_string() + INDEX_EXTENSION;
         let data = self
             .adapter
             .read()
@@ -175,7 +189,7 @@ impl DataStorage {
     }
 
     pub fn get_loaded_packs(&self) -> &BTreeSet<String> {
-        return &self.loaded_packs;
+        &self.loaded_packs
     }
 
     pub fn refresh(&mut self) -> Result<Vec<String>> {
@@ -220,7 +234,7 @@ impl DataStorage {
     pub fn replicate(&mut self, other: &DataStorage) -> Result<()> {
         for p in &other.loaded_packs {
             if !self.loaded_packs.contains(p) {
-                let rawdata = self.read_raw_object(&p, 0, 0)?;
+                let rawdata = self.read_raw_object(p, 0, 0)?;
                 self.write_raw_object(p, &rawdata)?;
             }
         }
@@ -236,33 +250,28 @@ impl DataStorage {
     ) -> Result<()> {
         if rev.is_resolved() || rev.is_deleted() || rev.is_empty() {
             Ok(())
+        } else if rev.is_delta() && delta.is_some() {
+            // If the revision is a delta revision, store according to the delta digest
+            let delta_obj = delta.unwrap();
+            self.write_data(rev.delta_digest.as_ref().unwrap(), Value::from(delta_obj))?;
+            {
+                let cache_l = self.cache.lock().unwrap();
+                let mut cache = cache_l.borrow_mut();
+                cache.put(rev.digest.to_string(), obj); // Only cache the full object
+            }
+            Ok(())
         } else {
-            if rev.is_delta() && delta.is_some() {
-                // If the revision is a delta revision, store according to the delta digest
-                let delta_obj = delta.unwrap();
-                self.write_data(
-                    rev.delta_digest.as_ref().unwrap(),
-                    Value::from(delta_obj.clone()),
-                )?;
+            // Otherwise store according to the full object digest
+            if rev.digest.len() <= 8 && u32::from_str_radix(&rev.digest, 16).is_ok() {
+                Ok(())
+            } else {
+                self.write_data(&rev.digest, obj.clone().into())?;
                 {
                     let cache_l = self.cache.lock().unwrap();
                     let mut cache = cache_l.borrow_mut();
                     cache.put(rev.digest.to_string(), obj); // Only cache the full object
                 }
                 Ok(())
-            } else {
-                // Otherwise store according to the full object digest
-                if rev.digest.len() <= 8 && u32::from_str_radix(&rev.digest, 16).is_ok() {
-                    Ok(())
-                } else {
-                    self.write_data(&rev.digest, obj.clone().into())?;
-                    {
-                        let cache_l = self.cache.lock().unwrap();
-                        let mut cache = cache_l.borrow_mut();
-                        cache.put(rev.digest.to_string(), obj); // Only cache the full object
-                    }
-                    Ok(())
-                }
             }
         }
     }
@@ -300,7 +309,7 @@ impl DataStorage {
                 // Otherwise read the data from the backend adapter
                 match self.read_data(&crev.digest)? {
                     Some(o) => {
-                        let obj = o.as_object().ok_or(anyhow!("not_an_object"))?;
+                        let obj = o.as_object().ok_or_else(|| anyhow!("not_an_object"))?;
                         return Ok(ReconstructionPath {
                             origin: obj.clone(),
                             path: reconstruction_path,
@@ -343,15 +352,15 @@ impl DataStorage {
             // Try to read the object by full digest
             match self.read_data(&rev.digest)? {
                 Some(o) => {
-                    let obj = o.as_object().ok_or(anyhow!("not_an_object"))?;
+                    let obj = o.as_object().ok_or_else(|| anyhow!("not_an_object"))?;
                     Ok(FetchedObject::Full(obj.clone()))
                 }
                 None => {
                     // Try to read the object by delta digest
                     match &rev.delta_digest {
-                        Some(dd) => match self.read_data(&dd)? {
+                        Some(dd) => match self.read_data(dd)? {
                             Some(o) => {
-                                let obj = o.as_object().ok_or(anyhow!("not_an_object"))?;
+                                let obj = o.as_object().ok_or_else(|| anyhow!("not_an_object"))?;
                                 Ok(FetchedObject::Delta(obj.clone()))
                             }
                             None => Err(anyhow!("failed_to_read_delta_object {}", dd)),
@@ -368,7 +377,7 @@ impl DataStorage {
         let rb = self.build_reconstruction_path(rev, rt)?;
         let mut origin = rb.origin;
         for r in rb.path.into_iter().rev() {
-            origin = self.apply_delta(&r, &origin)?
+            origin = self.apply_delta(r, &origin)?
         }
         {
             let cache_l = self.cache.lock().unwrap();
@@ -392,7 +401,7 @@ impl DataStorage {
                 obj.into_iter()
                     .map(|(k, v)| {
                         if k.starts_with(DELTA_PREFIX) {
-                            let changes = v.as_array().ok_or(anyhow!("not_an_array"))?;
+                            let changes = v.as_array().ok_or_else(|| anyhow!("not_an_array"))?;
                             let non_delta_corresponding_field =
                                 k.strip_prefix(DELTA_PREFIX).unwrap();
                             // Get the reference field (either as delta or non delta)
@@ -401,7 +410,7 @@ impl DataStorage {
                                     .get(&k)
                                     .unwrap()
                                     .as_array()
-                                    .ok_or(anyhow!("not_an_array"))?
+                                    .ok_or_else(|| anyhow!("not_an_array"))?
                             } else if delta_reference_object
                                 .contains_key(non_delta_corresponding_field)
                             {
@@ -409,14 +418,14 @@ impl DataStorage {
                                     .get(non_delta_corresponding_field)
                                     .unwrap()
                                     .as_array()
-                                    .ok_or(anyhow!("not_an_array"))?
+                                    .ok_or_else(|| anyhow!("not_an_array"))?
                             } else {
                                 bail!("missing_referenced_field")
                             };
                             // Apply patch
                             let mut base_array = base_array.clone();
-                            apply_diff_patch(&mut base_array, &changes)?;
-                            Ok((k, Value::from(base_array).clone()))
+                            apply_diff_patch(&mut base_array, changes)?;
+                            Ok((k, Value::from(base_array)))
                         } else {
                             Ok((k, v))
                         }
@@ -469,7 +478,7 @@ impl DataStorage {
                                         if k.starts_with(DELTA_PREFIX) {
                                             let non_delta_corresponding_field = k
                                                 .strip_prefix(DELTA_PREFIX)
-                                                .ok_or(anyhow!("prefix_disappeared"))?;
+                                                .ok_or_else(|| anyhow!("prefix_disappeared"))?;
                                             match leaf_object.get(non_delta_corresponding_field) {
                                                 Some(v) => {
                                                     if v.is_array() {
@@ -562,7 +571,7 @@ impl DataStorage {
                 if k.starts_with(DELTA_PREFIX) {
                     // If the field key starts with a delta prefix
                     let non_delta_corresponding_field = k.strip_prefix(DELTA_PREFIX).unwrap();
-                    let array = v.as_array().ok_or(anyhow!("not_an_array"))?;
+                    let array = v.as_array().ok_or_else(|| anyhow!("not_an_array"))?;
                     if delta_reference_revision.is_none() {
                         // Special case for first revision
                         // Return an non delta field with all the contents of the array
@@ -584,9 +593,9 @@ impl DataStorage {
                                 .get(key)
                                 .unwrap()
                                 .as_array()
-                                .ok_or(anyhow!("not_an_array"))?;
+                                .ok_or_else(|| anyhow!("not_an_array"))?;
                             // Compute changes
-                            let changes = make_diff_patch(delta_reference_array, &array)?;
+                            let changes = make_diff_patch(delta_reference_array, array)?;
                             contains_delta = true;
                             // If we store changes, always assign them to the delta key
                             return Ok((k.to_string(), Value::from(changes)));
@@ -594,7 +603,7 @@ impl DataStorage {
                     }
                     // If we are here the delta reference object did not contain a compatible field
                     // We are forced to skip the delta
-                    return Ok((k, Value::from(array.clone())));
+                    Ok((k, Value::from(array.clone())))
                 } else {
                     // Non delta field
                     Ok((k, v))
@@ -654,7 +663,7 @@ impl DataStorage {
         for (digest, v) in &self.stage {
             let content = serde_json::to_string(&v).unwrap();
             let bytes = content.as_bytes();
-            buf.extend_from_slice(&bytes);
+            buf.extend_from_slice(bytes);
             index_map.insert(digest.clone(), json!([start, bytes.len()]));
             remaining -= 1;
             if remaining > 0 {

@@ -35,8 +35,8 @@ pub fn escape(s: &str) -> String {
 
 /// Unescapes a string (if necessary)   
 pub fn unescape(s: &str) -> String {
-    if s.starts_with(STRING_ESCAPE_PREFIX) {
-        s[STRING_ESCAPE_PREFIX.len()..].to_string()
+    if let Some(stripped) = s.strip_prefix(STRING_ESCAPE_PREFIX) {
+        stripped.to_string()
     } else {
         s.to_string()
     }
@@ -54,7 +54,7 @@ pub fn digest_bytes(content: &[u8]) -> String {
     //hasher.update(content);
     //hex::encode(hasher.finish())
     let mut hasher = crypto::sha2::Sha256::new();
-    crypto::digest::Digest::input(&mut hasher, &content);
+    crypto::digest::Digest::input(&mut hasher, content);
     crypto::digest::Digest::result_str(&mut hasher)
 }
 
@@ -85,7 +85,7 @@ pub fn digest_object(o: &Map<String, Value>) -> Result<String> {
 }
 
 /// Returns the identifier of an object with path
-pub fn get_identifier(value: &Map<String, Value>, path: &Vec<String>) -> String {
+pub fn get_identifier(value: &Map<String, Value>, path: &[String]) -> String {
     if value.contains_key(ID_FIELD) {
         let v = value.get(ID_FIELD).unwrap();
         if v.is_string() {
@@ -121,8 +121,7 @@ pub fn merge_arrays(order_m: &Vec<Value>, order_n: &mut Vec<Value>) {
             None => pivot_pos_in_m += 1,
         }
     }
-    let mut current_pos_in_m = 0;
-    for t in order_m {
+    for (current_pos_in_m, t) in order_m.iter().enumerate() {
         // Search t in N
         let it = order_n.iter().position(|e| *e == *t);
         match it {
@@ -140,7 +139,6 @@ pub fn merge_arrays(order_m: &Vec<Value>, order_n: &mut Vec<Value>) {
                 }
             }
         }
-        current_pos_in_m += 1;
     }
 }
 
@@ -191,11 +189,7 @@ pub fn unflatten(c: &HashMap<String, Map<String, Value>>, value: &Value) -> Opti
             }
         }
         Value::Array(a) => Some(Value::from(
-            a.iter()
-                .map(|v| unflatten(c, v))
-                .filter(|x| x.is_some())
-                .map(|v| v.unwrap())
-                .collect::<Vec<_>>(),
+            a.iter().filter_map(|v| unflatten(c, v)).collect::<Vec<_>>(),
         )),
         Value::Object(o) => Some(Value::from(
             o.iter()
@@ -214,7 +208,7 @@ pub fn unflatten(c: &HashMap<String, Map<String, Value>>, value: &Value) -> Opti
 
 /// Creates an array diff patch
 pub fn make_diff_patch(old: &Vec<Value>, new: &Vec<Value>) -> Result<Vec<Value>> {
-    let ops = myers_unfilled(&old, &new);
+    let ops = myers_unfilled(old, new);
     let mut patch = vec![];
     for o in ops {
         let Move(op, s, t, _) = o;
@@ -243,25 +237,25 @@ pub fn apply_diff_patch(old: &mut Vec<Value>, patch: &Vec<Value>) -> Result<()> 
     for op in patch {
         let operation = op[0]
             .as_str()
-            .ok_or(anyhow!("invalid_patch_op_not_a_string: {:?}", patch))?;
+            .ok_or_else(|| anyhow!("invalid_patch_op_not_a_string: {:?}", patch))?;
         if operation == PATCH_DELETE {
             let length = op[1]
                 .as_u64()
-                .ok_or(anyhow!("invalid_patch_length_not_a_number"))?
+                .ok_or_else(|| anyhow!("invalid_patch_length_not_a_number"))?
                 as usize;
             let index = op[2]
                 .as_u64()
-                .ok_or(anyhow!("invalid_patch_index_not_a_number"))?
+                .ok_or_else(|| anyhow!("invalid_patch_index_not_a_number"))?
                 as usize;
             old.drain(index..index + length);
         } else if operation == PATCH_INSERT {
             let index = op[1]
                 .as_u64()
-                .ok_or(anyhow!("invalid_patch_index_not_a_number"))?
+                .ok_or_else(|| anyhow!("invalid_patch_index_not_a_number"))?
                 as usize;
             let items = op[2]
                 .as_array()
-                .ok_or(anyhow!("invalid_patch_items_not_an_array"))?
+                .ok_or_else(|| anyhow!("invalid_patch_items_not_an_array"))?
                 .clone();
             old.splice(index..index, items.into_iter());
         } else {

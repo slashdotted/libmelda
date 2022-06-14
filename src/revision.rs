@@ -42,7 +42,7 @@ impl Revision {
     #[allow(dead_code)]
     pub fn null() -> Revision {
         Revision {
-            index: 0 as u32,
+            index: 0_u32,
             digest: String::new(),
             delta_digest: None,
             tail: None,
@@ -187,11 +187,10 @@ impl ToString for Revision {
 /// Comparison
 impl PartialEq for Revision {
     fn eq(&self, other: &Self) -> bool {
-        if self.index != other.index {
-            false
-        } else if self.digest != other.digest {
-            false
-        } else if self.delta_digest != other.delta_digest {
+        if self.index != other.index
+            || self.digest != other.digest
+            || self.delta_digest != other.delta_digest
+        {
             false
         } else {
             self.tail.eq(&other.tail)

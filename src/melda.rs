@@ -370,11 +370,8 @@ impl Melda {
         }
         block.insert(CHANGESETS_FIELD.to_string(), Value::from(changes));
         // Insert information object
-        if information.is_some() {
-            block.insert(
-                INFORMATION_FIELD.to_string(),
-                Value::from(information.unwrap()),
-            );
+        if let Some(information) = information {
+            block.insert(INFORMATION_FIELD.to_string(), Value::from(information));
         }
         // Insert anchors
         let anchors_blocks = self.get_anchors();
@@ -559,9 +556,8 @@ impl Melda {
         self.blocks.read().unwrap().iter().for_each(|(_, block)| {
             let status = block.read().unwrap().status;
             if status == Status::Valid {
-                drop(status);
                 let block_r = block.read().unwrap();
-                if let Ok(_) = self.apply_block(&block_r) {
+                if self.apply_block(&block_r).is_ok() {
                     drop(block_r);
                     let mut block_w = block.write().unwrap();
                     block_w.status = Status::ValidAndApplied;
@@ -660,14 +656,12 @@ impl Melda {
                 .read()
                 .expect("cannot_acquire_block_for_reading")
                 .status;
-            if status == Status::Valid {
-                if let Ok(_) = self.apply_block(&block_r) {
-                    drop(block_r);
-                    let mut block_w = block.write().expect("cannot_acquire_block_for_writing");
-                    block_w.status = Status::ValidAndApplied;
-                    // We can drop the changes vector
-                    block_w.changes = None;
-                }
+            if status == Status::Valid && self.apply_block(&block_r).is_ok() {
+                drop(block_r);
+                let mut block_w = block.write().expect("cannot_acquire_block_for_writing");
+                block_w.status = Status::ValidAndApplied;
+                // We can drop the changes vector
+                block_w.changes = None;
             }
         });
         drop(blocks_r);
@@ -772,21 +766,19 @@ impl Melda {
             let block_item = blocks_r.get(&bid).unwrap();
             let block_r = block_item.read().expect("cannot_acquire_block_for_reading");
             let status = block_r.status;
-            if status == Status::Valid {
-                if let Ok(_) = self.apply_block(&block_r) {
-                    if let Some(parents) = &block_r.parents {
-                        for b in parents {
-                            to_apply.push_back(b.to_string());
-                        }
+            if status == Status::Valid && self.apply_block(&block_r).is_ok() {
+                if let Some(parents) = &block_r.parents {
+                    for b in parents {
+                        to_apply.push_back(b.to_string());
                     }
-                    drop(block_r);
-                    let mut block_w = block_item
-                        .write()
-                        .expect("cannot_acquire_block_for_writing");
-                    block_w.status = Status::ValidAndApplied;
-                    // We can drop the changes vector
-                    block_w.changes = None;
                 }
+                drop(block_r);
+                let mut block_w = block_item
+                    .write()
+                    .expect("cannot_acquire_block_for_writing");
+                block_w.status = Status::ValidAndApplied;
+                // We can drop the changes vector
+                block_w.changes = None;
             }
         }
         Ok(())
@@ -1018,7 +1010,7 @@ impl Melda {
             let c = Mutex::new(HashMap::<String, Map<String, Value>>::new());
             let docs_r = self.documents.read().unwrap();
             docs_r.par_iter().for_each(|(uuid, rt)| {
-                let base_revision = rt.get_winner().ok_or(anyhow!("no_winner")).unwrap();
+                let base_revision = rt.get_winner().ok_or_else(|| anyhow!("no_winner")).unwrap();
                 if !base_revision.is_deleted() {
                     let data = self.data.read().unwrap();
                     let mut obj = data.read_object(base_revision, rt).unwrap();
@@ -1031,7 +1023,8 @@ impl Melda {
             let c_r = c.lock().unwrap();
             let root = c_r.get(ROOT_ID).expect("root_object_not_found");
             let root = Value::from(root.clone());
-            let result = Value::from(unflatten(&c_r, &root).unwrap().clone())
+            let result = unflatten(&c_r, &root)
+                .unwrap()
                 .as_object()
                 .expect("not_an_object")
                 .clone();
@@ -1093,7 +1086,7 @@ impl Melda {
                 let docs_r = self.documents.read().unwrap();
                 let w = docs_r.get(uuid).unwrap().get_winner().unwrap().clone(); // Winning revision
                 drop(docs_r);
-                let digest = digest_object(&obj).unwrap(); // Digest of the "full" object
+                let digest = digest_object(obj).unwrap(); // Digest of the "full" object
                 if digest.ne(&w.digest) {
                     // The w.digest corresponds to the "full" object
                     let docs_r = self.documents.read().unwrap();
@@ -1135,7 +1128,7 @@ impl Melda {
                 }
             } else {
                 let mut rt = RevisionTree::new();
-                let rev = Revision::new(1u32, digest_object(&obj).unwrap(), None);
+                let rev = Revision::new(1u32, digest_object(obj).unwrap(), None);
                 let mut data_w = self.data.write().unwrap();
                 data_w.write_object(&rev, obj.clone(), None).unwrap();
                 drop(data_w);
@@ -1272,7 +1265,7 @@ impl Melda {
     {
         match self.documents.read().unwrap().get(uuid.as_ref()) {
             Some(rt) => {
-                let w = rt.get_winner().ok_or(anyhow!("no_winner"))?;
+                let w = rt.get_winner().ok_or_else(|| anyhow!("no_winner"))?;
                 let l = rt.get_leafs();
                 Ok(l.iter()
                     .filter(|r| w.ne(r))
@@ -1324,7 +1317,9 @@ impl Melda {
         {
             let winner = Revision::from(winner).expect("instatus_revision_string");
             let docs_r = self.documents.read().unwrap();
-            let rt = docs_r.get(uuid).ok_or(anyhow!("unknown_document"))?;
+            let rt = docs_r
+                .get(uuid)
+                .ok_or_else(|| anyhow!("unknown_document"))?;
             let leafs = rt.get_leafs();
             // We can only resolve to a status revision
             if !leafs.contains(&winner) {
@@ -1339,12 +1334,13 @@ impl Melda {
             let merged = data_r.read_object(&winner, rt)?;
             drop(data_r);
             drop(leafs);
-            drop(rt);
             drop(docs_r);
             self.update_object(uuid, merged)?;
         }
         let docs_r = self.documents.read().unwrap();
-        let rt = docs_r.get(uuid).ok_or(anyhow!("unknown_document"))?;
+        let rt = docs_r
+            .get(uuid)
+            .ok_or_else(|| anyhow!("unknown_document"))?;
         let winner = rt
             .get_winner()
             .expect("revision_tree_instatus_state")
@@ -1352,7 +1348,9 @@ impl Melda {
         drop(docs_r);
         // Seal all other revisions as resolved
         let mut docs_w = self.documents.write().unwrap();
-        let rt = docs_w.get_mut(uuid).ok_or(anyhow!("unknown_document"))?;
+        let rt = docs_w
+            .get_mut(uuid)
+            .ok_or_else(|| anyhow!("unknown_document"))?;
         let leafs: Vec<Revision> = rt.get_leafs().iter().map(|r| (*r).clone()).collect();
         for r in leafs {
             if r != winner {
@@ -1486,132 +1484,134 @@ impl Melda {
                 }
                 if s.contains_key(CHANGESETS_FIELD) {
                     let changes = s.get(CHANGESETS_FIELD);
-                    if changes.is_some() && changes.unwrap().is_array() {
-                        for c in changes.unwrap().as_array().unwrap() {
-                            if c.is_array() {
-                                let record = c.as_array().unwrap();
-                                if record.len() == 2 {
-                                    let uuid = record[0]
-                                        .as_str()
-                                        .ok_or(anyhow!("expecting_uuid_string"))?;
-                                    let digest = record[1]
-                                        .as_str()
-                                        .ok_or(anyhow!("expecting_digest_string"))?;
-                                    let r = Revision::new(1, digest.to_string(), None);
-                                    if !self.documents.read().unwrap().contains_key(uuid) {
-                                        let mut rt = RevisionTree::new();
-                                        if rt.add(r.clone(), None) {
+                    if let Some(changes) = changes {
+                        if changes.is_array() {
+                            for c in changes.as_array().unwrap() {
+                                if c.is_array() {
+                                    let record = c.as_array().unwrap();
+                                    if record.len() == 2 {
+                                        let uuid = record[0]
+                                            .as_str()
+                                            .ok_or_else(|| anyhow!("expecting_uuid_string"))?;
+                                        let digest = record[1]
+                                            .as_str()
+                                            .ok_or_else(|| anyhow!("expecting_digest_string"))?;
+                                        let r = Revision::new(1, digest.to_string(), None);
+                                        if !self.documents.read().unwrap().contains_key(uuid) {
+                                            let mut rt = RevisionTree::new();
+                                            if rt.add(r.clone(), None) {
+                                                self.stage.write().unwrap().push(Change(
+                                                    uuid.to_string(),
+                                                    r,
+                                                    None,
+                                                ));
+                                            }
+                                            self.documents
+                                                .write()
+                                                .unwrap()
+                                                .insert(uuid.to_string(), rt);
+                                        } else {
+                                            let mut docs = self.documents.write().unwrap();
+                                            let rt = docs.get_mut(uuid).unwrap();
+                                            if rt.add(r.clone(), None) {
+                                                self.stage.write().unwrap().push(Change(
+                                                    uuid.to_string(),
+                                                    r,
+                                                    None,
+                                                ));
+                                            }
+                                        }
+                                    } else if record.len() == 3 {
+                                        let uuid = record[0]
+                                            .as_str()
+                                            .ok_or_else(|| anyhow!("expecting_uuid_string"))?;
+                                        let prev = record[1]
+                                            .as_str()
+                                            .ok_or_else(|| anyhow!("expecting_revision_string"))?;
+                                        let digest = record[2]
+                                            .as_str()
+                                            .ok_or_else(|| anyhow!("expecting_digest_string"))?;
+                                        let prev = Revision::from(prev)?;
+                                        let r = Revision::new(
+                                            prev.index + 1,
+                                            digest.to_string(),
+                                            Some(&prev),
+                                        );
+                                        if !self.documents.read().unwrap().contains_key(uuid) {
+                                            // FIXME: Should this be allowed?
+                                            // This might happen if we save the stage, then reload to a previous block
+                                            // were an object did not yet exist and then try to re-apply the stage
+                                            let mut rt = RevisionTree::new();
                                             self.stage.write().unwrap().push(Change(
                                                 uuid.to_string(),
-                                                r,
-                                                None,
+                                                r.clone(),
+                                                Some(prev.clone()),
                                             ));
+                                            rt.add(r, Some(prev));
+                                            self.documents
+                                                .write()
+                                                .unwrap()
+                                                .insert(uuid.to_string(), rt);
+                                        } else {
+                                            let mut docs = self.documents.write().unwrap();
+                                            let rt = docs.get_mut(uuid).unwrap();
+                                            if rt.add(r.clone(), Some(prev.clone())) {
+                                                self.stage.write().unwrap().push(Change(
+                                                    uuid.to_string(),
+                                                    r,
+                                                    Some(prev),
+                                                ));
+                                            }
                                         }
-                                        self.documents
-                                            .write()
-                                            .unwrap()
-                                            .insert(uuid.to_string(), rt);
+                                    } else if record.len() == 4 {
+                                        let uuid = record[0]
+                                            .as_str()
+                                            .ok_or_else(|| anyhow!("expecting_uuid_string"))?;
+                                        let prev = record[1]
+                                            .as_str()
+                                            .ok_or_else(|| anyhow!("expecting_revision_string"))?;
+                                        let digest = record[2]
+                                            .as_str()
+                                            .ok_or_else(|| anyhow!("expecting_digest_string"))?;
+                                        let delta_digest = record[3]
+                                            .as_str()
+                                            .ok_or_else(|| anyhow!("expecting_digest_string"))?;
+                                        let prev = Revision::from(prev)?;
+                                        let r = Revision::new_with_delta(
+                                            prev.index + 1,
+                                            digest.to_string(),
+                                            delta_digest.to_string(),
+                                            Some(&prev),
+                                        );
+                                        if !self.documents.read().unwrap().contains_key(uuid) {
+                                            // FIXME: Should this be allowed?
+                                            // This might happen if we save the stage, then reload to a previous block
+                                            // were an object did not yet exist and then try to re-apply the stage
+                                            let mut rt = RevisionTree::new();
+                                            self.stage.write().unwrap().push(Change(
+                                                uuid.to_string(),
+                                                r.clone(),
+                                                Some(prev.clone()),
+                                            ));
+                                            rt.add(r, Some(prev));
+                                            self.documents
+                                                .write()
+                                                .unwrap()
+                                                .insert(uuid.to_string(), rt);
+                                        } else {
+                                            let mut docs = self.documents.write().unwrap();
+                                            let rt = docs.get_mut(uuid).unwrap();
+                                            if rt.add(r.clone(), Some(prev.clone())) {
+                                                self.stage.write().unwrap().push(Change(
+                                                    uuid.to_string(),
+                                                    r,
+                                                    Some(prev),
+                                                ));
+                                            }
+                                        }
                                     } else {
-                                        let mut docs = self.documents.write().unwrap();
-                                        let rt = docs.get_mut(uuid).unwrap();
-                                        if rt.add(r.clone(), None) {
-                                            self.stage.write().unwrap().push(Change(
-                                                uuid.to_string(),
-                                                r,
-                                                None,
-                                            ));
-                                        }
+                                        bail!("instatus_changes_record")
                                     }
-                                } else if record.len() == 3 {
-                                    let uuid = record[0]
-                                        .as_str()
-                                        .ok_or(anyhow!("expecting_uuid_string"))?;
-                                    let prev = record[1]
-                                        .as_str()
-                                        .ok_or(anyhow!("expecting_revision_string"))?;
-                                    let digest = record[2]
-                                        .as_str()
-                                        .ok_or(anyhow!("expecting_digest_string"))?;
-                                    let prev = Revision::from(prev)?;
-                                    let r = Revision::new(
-                                        prev.index + 1,
-                                        digest.to_string(),
-                                        Some(&prev),
-                                    );
-                                    if !self.documents.read().unwrap().contains_key(uuid) {
-                                        // FIXME: Should this be allowed?
-                                        // This might happen if we save the stage, then reload to a previous block
-                                        // were an object did not yet exist and then try to re-apply the stage
-                                        let mut rt = RevisionTree::new();
-                                        self.stage.write().unwrap().push(Change(
-                                            uuid.to_string(),
-                                            r.clone(),
-                                            Some(prev.clone()),
-                                        ));
-                                        rt.add(r, Some(prev));
-                                        self.documents
-                                            .write()
-                                            .unwrap()
-                                            .insert(uuid.to_string(), rt);
-                                    } else {
-                                        let mut docs = self.documents.write().unwrap();
-                                        let rt = docs.get_mut(uuid).unwrap();
-                                        if rt.add(r.clone(), Some(prev.clone())) {
-                                            self.stage.write().unwrap().push(Change(
-                                                uuid.to_string(),
-                                                r,
-                                                Some(prev),
-                                            ));
-                                        }
-                                    }
-                                } else if record.len() == 4 {
-                                    let uuid = record[0]
-                                        .as_str()
-                                        .ok_or(anyhow!("expecting_uuid_string"))?;
-                                    let prev = record[1]
-                                        .as_str()
-                                        .ok_or(anyhow!("expecting_revision_string"))?;
-                                    let digest = record[2]
-                                        .as_str()
-                                        .ok_or(anyhow!("expecting_digest_string"))?;
-                                    let delta_digest = record[3]
-                                        .as_str()
-                                        .ok_or(anyhow!("expecting_digest_string"))?;
-                                    let prev = Revision::from(prev)?;
-                                    let r = Revision::new_with_delta(
-                                        prev.index + 1,
-                                        digest.to_string(),
-                                        delta_digest.to_string(),
-                                        Some(&prev),
-                                    );
-                                    if !self.documents.read().unwrap().contains_key(uuid) {
-                                        // FIXME: Should this be allowed?
-                                        // This might happen if we save the stage, then reload to a previous block
-                                        // were an object did not yet exist and then try to re-apply the stage
-                                        let mut rt = RevisionTree::new();
-                                        self.stage.write().unwrap().push(Change(
-                                            uuid.to_string(),
-                                            r.clone(),
-                                            Some(prev.clone()),
-                                        ));
-                                        rt.add(r, Some(prev));
-                                        self.documents
-                                            .write()
-                                            .unwrap()
-                                            .insert(uuid.to_string(), rt);
-                                    } else {
-                                        let mut docs = self.documents.write().unwrap();
-                                        let rt = docs.get_mut(uuid).unwrap();
-                                        if rt.add(r.clone(), Some(prev.clone())) {
-                                            self.stage.write().unwrap().push(Change(
-                                                uuid.to_string(),
-                                                r,
-                                                Some(prev),
-                                            ));
-                                        }
-                                    }
-                                } else {
-                                    bail!("instatus_changes_record")
                                 }
                             }
                         }
@@ -1690,7 +1690,7 @@ impl Melda {
     /// assert_eq!(&parent, &winner);
     pub fn get_parent_revision(&self, uuid: &str, revision: &str) -> Result<Option<String>> {
         let docs = self.documents.read().unwrap();
-        let rt = docs.get(uuid).ok_or(anyhow!("unknown_document"))?;
+        let rt = docs.get(uuid).ok_or_else(|| anyhow!("unknown_document"))?;
         let revision = Revision::from(revision).expect("instatus_revision_string");
         match rt.get_parent(&revision) {
             Some(r) => Ok(Some(r.to_string())),
@@ -1728,17 +1728,15 @@ impl Melda {
             if raw_block.contains_key(PACK_FIELD) {
                 let packs = raw_block
                     .get(PACK_FIELD)
-                    .ok_or(anyhow!("missing_pack_reference"))
+                    .ok_or_else(|| anyhow!("missing_pack_reference"))
                     .unwrap()
                     .as_array()
-                    .ok_or(anyhow!("packs_not_an_array"))?;
+                    .ok_or_else(|| anyhow!("packs_not_an_array"))?;
                 if !packs.iter().all(|x| {
                     if x.is_string() {
                         let data = self.data.read().unwrap();
-                        match data.is_readable_and_valid_pack(x.as_str().unwrap()) {
-                            Ok(v) => v,
-                            Err(_) => false,
-                        }
+                        data.is_readable_and_valid_pack(x.as_str().unwrap())
+                            .unwrap_or(false)
                     } else {
                         false
                     }
@@ -1758,7 +1756,7 @@ impl Melda {
             if raw_block.contains_key(INFORMATION_FIELD) {
                 let info = raw_block
                     .get(INFORMATION_FIELD)
-                    .ok_or(anyhow!("missing_root_id"))?;
+                    .ok_or_else(|| anyhow!("missing_root_id"))?;
                 if !info.is_object() {
                     bail!("info_not_an_object");
                 }
@@ -1768,7 +1766,7 @@ impl Melda {
             if raw_block.contains_key(PARENTS_FIELD) {
                 let parents = raw_block
                     .get(PARENTS_FIELD)
-                    .ok_or(anyhow!("missing_parents_field"))?;
+                    .ok_or_else(|| anyhow!("missing_parents_field"))?;
                 if !parents.is_array() {
                     bail!("parents_not_an_array");
                 }
@@ -1784,62 +1782,68 @@ impl Melda {
                 }
             }
             let changes = raw_block.get(CHANGESETS_FIELD);
-            if changes.is_some() && changes.unwrap().is_array() {
-                // Process changeset
-                let mut cs: Vec<Change> = vec![];
-                for c in changes.unwrap().as_array().unwrap() {
-                    if c.is_array() {
-                        let record = c.as_array().unwrap();
-                        if record.len() == 2 {
-                            // Creation record
-                            let uuid =
-                                record[0].as_str().ok_or(anyhow!("expecting_uuid_string"))?;
-                            let digest = record[1]
-                                .as_str()
-                                .ok_or(anyhow!("expecting_digest_string"))?;
-                            let r = Revision::new(1, digest.to_string(), None);
-                            cs.push(Change(uuid.to_string(), r, None));
-                        } else if record.len() == 3 {
-                            // Update record
-                            let uuid =
-                                record[0].as_str().ok_or(anyhow!("expecting_uuid_string"))?;
-                            let prev = record[1]
-                                .as_str()
-                                .ok_or(anyhow!("expecting_revision_string"))?;
-                            let digest = record[2]
-                                .as_str()
-                                .ok_or(anyhow!("expecting_digest_string"))?;
-                            let prev = Revision::from(prev)?;
-                            let r = Revision::new(prev.index + 1, digest.to_string(), Some(&prev));
-                            cs.push(Change(uuid.to_string(), r, Some(prev)));
-                        } else if record.len() == 4 {
-                            // Update record with delta
-                            let uuid =
-                                record[0].as_str().ok_or(anyhow!("expecting_uuid_string"))?;
-                            let prev = record[1]
-                                .as_str()
-                                .ok_or(anyhow!("expecting_revision_string"))?;
-                            let digest = record[2]
-                                .as_str()
-                                .ok_or(anyhow!("expecting_digest_string"))?;
-                            let delta_digest = record[3]
-                                .as_str()
-                                .ok_or(anyhow!("expecting_digest_string"))?;
-                            let prev = Revision::from(prev)?;
-                            let r = Revision::new_with_delta(
-                                prev.index + 1,
-                                digest.to_string(),
-                                delta_digest.to_string(),
-                                Some(&prev),
-                            );
-                            cs.push(Change(uuid.to_string(), r, Some(prev)));
-                        } else {
-                            bail!("instatus_changes_record")
+            if let Some(changes) = changes {
+                if changes.is_array() {
+                    // Process changeset
+                    let mut cs: Vec<Change> = vec![];
+                    for c in changes.as_array().unwrap() {
+                        if c.is_array() {
+                            let record = c.as_array().unwrap();
+                            if record.len() == 2 {
+                                // Creation record
+                                let uuid = record[0]
+                                    .as_str()
+                                    .ok_or_else(|| anyhow!("expecting_uuid_string"))?;
+                                let digest = record[1]
+                                    .as_str()
+                                    .ok_or_else(|| anyhow!("expecting_digest_string"))?;
+                                let r = Revision::new(1, digest.to_string(), None);
+                                cs.push(Change(uuid.to_string(), r, None));
+                            } else if record.len() == 3 {
+                                // Update record
+                                let uuid = record[0]
+                                    .as_str()
+                                    .ok_or_else(|| anyhow!("expecting_uuid_string"))?;
+                                let prev = record[1]
+                                    .as_str()
+                                    .ok_or_else(|| anyhow!("expecting_revision_string"))?;
+                                let digest = record[2]
+                                    .as_str()
+                                    .ok_or_else(|| anyhow!("expecting_digest_string"))?;
+                                let prev = Revision::from(prev)?;
+                                let r =
+                                    Revision::new(prev.index + 1, digest.to_string(), Some(&prev));
+                                cs.push(Change(uuid.to_string(), r, Some(prev)));
+                            } else if record.len() == 4 {
+                                // Update record with delta
+                                let uuid = record[0]
+                                    .as_str()
+                                    .ok_or_else(|| anyhow!("expecting_uuid_string"))?;
+                                let prev = record[1]
+                                    .as_str()
+                                    .ok_or_else(|| anyhow!("expecting_revision_string"))?;
+                                let digest = record[2]
+                                    .as_str()
+                                    .ok_or_else(|| anyhow!("expecting_digest_string"))?;
+                                let delta_digest = record[3]
+                                    .as_str()
+                                    .ok_or_else(|| anyhow!("expecting_digest_string"))?;
+                                let prev = Revision::from(prev)?;
+                                let r = Revision::new_with_delta(
+                                    prev.index + 1,
+                                    digest.to_string(),
+                                    delta_digest.to_string(),
+                                    Some(&prev),
+                                );
+                                cs.push(Change(uuid.to_string(), r, Some(prev)));
+                            } else {
+                                bail!("instatus_changes_record")
+                            }
                         }
                     }
-                }
-                if !cs.is_empty() {
-                    b_changes = Some(cs);
+                    if !cs.is_empty() {
+                        b_changes = Some(cs);
+                    }
                 }
             }
         }

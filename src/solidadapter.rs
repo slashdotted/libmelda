@@ -70,13 +70,13 @@ impl SolidAdapter {
             .into_string()
             .unwrap();
 
-        let u = if username.is_some() {
-            username.unwrap()
+        let u = if let Some(username) = username {
+            username
         } else {
             env::var("MELDA_SOLID_USERNAME")?
         };
-        let p = if password.is_some() {
-            password.unwrap()
+        let p = if let Some(password) = password {
+            password
         } else {
             env::var("MELDA_SOLID_PASSWORD")?
         };
@@ -125,7 +125,7 @@ impl SolidAdapter {
                         if response.status().as_u16() == 200 {
                             let data = response.bytes()?;
                             cache.put(key.to_string(), data.to_vec());
-                            cacache::write_sync(&self.disk_cache_dir, key, data.to_vec())?;
+                            cacache::write_sync(&self.disk_cache_dir, key, &data)?;
                             Ok(data.to_vec())
                         } else {
                             bail!("cannot_read_object")
@@ -138,7 +138,7 @@ impl SolidAdapter {
 
     fn ensure_container_exists(&self) -> Result<()> {
         let url = self.url.clone() + "/" + self.folder.as_str();
-        let response = self.client.head(url.clone()).send()?;
+        let response = self.client.head(url).send()?;
         if response.status().as_u16() != 200 {
             let mut headers = HeaderMap::new();
             headers.insert("Content-Type", "text/turtle".parse().unwrap());
@@ -159,7 +159,7 @@ impl SolidAdapter {
     }
 
     /// Recursively deletes the container folder
-    /// 
+    ///
     pub fn delete_container(&self) -> Result<()> {
         let items = self.list_objects("")?;
         let mut prefixes = BTreeSet::new();
@@ -187,7 +187,7 @@ impl SolidAdapter {
 
     fn get_object_url(&self, key: &str) -> Result<(String, Url)> {
         let prefix = &key[..2];
-        let objecturl = self.url.clone() + "/" + self.folder.as_str() + "/" + &prefix + "/" + key;
+        let objecturl = self.url.clone() + "/" + self.folder.as_str() + "/" + prefix + "/" + key;
         Ok((prefix.to_string(), Url::parse(&objecturl)?))
     }
 
@@ -231,41 +231,35 @@ impl SolidAdapter {
         let base_iri = Iri::parse(target.clone()).unwrap();
         TurtleParser::new(data.as_bytes(), Some(base_iri)).parse_all(&mut |t| {
             if t.predicate == rdf_type && t.object == ldp_resource.into() {
-                match t.subject {
-                    rio_api::model::Subject::NamedNode(nn) => match Url::parse(nn.iri) {
-                        Ok(u) => {
-                            match restype {
-                                ResourceType::File => {
-                                    if !u.to_string().ends_with("/") {
-                                        // Skip subfolders
-                                        let dp = Path::new(u.path());
-                                        let fname =
-                                            dp.file_name().unwrap().to_str().unwrap().to_string();
-                                        if fname.ends_with(ext) {
-                                            let fname =
-                                                fname.strip_suffix(ext).unwrap().to_string();
-                                            list.push(fname);
-                                        }
+                if let rio_api::model::Subject::NamedNode(nn) = t.subject {
+                    if let Ok(u) = Url::parse(nn.iri) {
+                        match restype {
+                            ResourceType::File => {
+                                if !u.to_string().ends_with('/') {
+                                    // Skip subfolders
+                                    let dp = Path::new(u.path());
+                                    let fname =
+                                        dp.file_name().unwrap().to_str().unwrap().to_string();
+                                    if fname.ends_with(ext) {
+                                        let fname = fname.strip_suffix(ext).unwrap().to_string();
+                                        list.push(fname);
                                     }
                                 }
-                                ResourceType::Folder => {
-                                    if u.to_string().ends_with("/") {
-                                        // Skip files
-                                        let dp = Path::new(u.path());
-                                        let fname =
-                                            dp.file_name().unwrap().to_str().unwrap().to_string();
-                                        if fname.ends_with(ext) {
-                                            let fname =
-                                                fname.strip_suffix(ext).unwrap().to_string();
-                                            list.push(fname + "/");
-                                        }
+                            }
+                            ResourceType::Folder => {
+                                if u.to_string().ends_with('/') {
+                                    // Skip files
+                                    let dp = Path::new(u.path());
+                                    let fname =
+                                        dp.file_name().unwrap().to_str().unwrap().to_string();
+                                    if fname.ends_with(ext) {
+                                        let fname = fname.strip_suffix(ext).unwrap().to_string();
+                                        list.push(fname + "/");
                                     }
                                 }
                             }
                         }
-                        Err(_) => (),
-                    },
-                    _ => (),
+                    }
                 }
             }
             Ok(()) as Result<(), TurtleError>
@@ -310,13 +304,13 @@ impl Adapter for SolidAdapter {
                 headers.insert("Content-Type", "application/octet-stream".parse().unwrap());
                 let response = self
                     .client
-                    .put(url.clone())
+                    .put(url)
                     .headers(headers)
                     .body(data.to_vec())
                     .send()?;
                 if response.status().as_u16() >= 200 || response.status().as_u16() <= 204 {
                     cache.put(key.to_string(), data.to_vec());
-                    cacache::write_sync(&self.disk_cache_dir, key, data.to_vec())?;
+                    cacache::write_sync(&self.disk_cache_dir, key, data)?;
                 } else {
                     bail!("cannot_write_object");
                 }

@@ -31,6 +31,12 @@ impl MemoryAdapter {
     }
 }
 
+impl Default for MemoryAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Adapter for MemoryAdapter {
     /// Reads an object or a sub-object from the backend storage. When offset and length are both 0
     /// the full object is returned, otherwise the sub-object is returned
@@ -79,7 +85,7 @@ impl Adapter for MemoryAdapter {
             .unwrap()
             .borrow()
             .keys()
-            .filter(|x| return x.ends_with(ext))
+            .filter(|x| x.ends_with(ext))
             .map(|x| x.strip_suffix(ext).unwrap().to_string())
             .collect();
         Ok(list)
