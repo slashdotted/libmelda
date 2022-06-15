@@ -449,7 +449,7 @@ impl Melda {
     /// assert_eq!(value, object);
     /// ```
     pub fn get_value(&self, uuid: &str, revision: &str) -> Result<Map<String, Value>> {
-        let revision = Revision::from(revision).expect("instatus_revision_string");
+        let revision = Revision::from(revision).expect("invalid_revision_string");
         match self.documents.read().unwrap().get(uuid) {
             Some(o) => self.data.read().unwrap().read_object(&revision, o),
             None => Err(anyhow!("invalid object uuid")),
@@ -1315,7 +1315,7 @@ impl Melda {
     /// assert_eq!("2-255cc6219e48f526c04bc5af86439c34e4fe39fcdc611758ff833a2ff80583f0_e5d1d20", winner);
     pub fn resolve_as(&mut self, uuid: &str, winner: &str) -> Result<String> {
         {
-            let winner = Revision::from(winner).expect("instatus_revision_string");
+            let winner = Revision::from(winner).expect("invalid_revision_string");
             let docs_r = self.documents.read().unwrap();
             let rt = docs_r
                 .get(uuid)
@@ -1343,7 +1343,7 @@ impl Melda {
             .ok_or_else(|| anyhow!("unknown_document"))?;
         let winner = rt
             .get_winner()
-            .expect("revision_tree_instatus_state")
+            .expect("revision_tree_invalid_state")
             .clone();
         drop(docs_r);
         // Seal all other revisions as resolved
@@ -1610,7 +1610,7 @@ impl Melda {
                                             }
                                         }
                                     } else {
-                                        bail!("instatus_changes_record")
+                                        bail!("invalid_changes_record")
                                     }
                                 }
                             }
@@ -1691,7 +1691,7 @@ impl Melda {
     pub fn get_parent_revision(&self, uuid: &str, revision: &str) -> Result<Option<String>> {
         let docs = self.documents.read().unwrap();
         let rt = docs.get(uuid).ok_or_else(|| anyhow!("unknown_document"))?;
-        let revision = Revision::from(revision).expect("instatus_revision_string");
+        let revision = Revision::from(revision).expect("invalid_revision_string");
         match rt.get_parent(&revision) {
             Some(r) => Ok(Some(r.to_string())),
             None => Ok(None),
@@ -1703,16 +1703,16 @@ impl Melda {
         let object = blockid.to_string() + DELTA_EXTENSION;
         let data = self.data.read().unwrap();
         let data = data.read_raw_object(object.as_str(), 0, 0)?;
-        let json = std::str::from_utf8(&data)?;
-        let json: Value = serde_json::from_str(json)?;
-        if !json.is_object() {
-            bail!("instatus_block_format");
-        }
-        let blockobj = json.as_object().unwrap();
         let digest = digest_bytes(data.as_slice());
         if !digest.eq(blockid) {
             bail!("mismatching_block_hash");
-        };
+        };        
+        let json = std::str::from_utf8(&data)?;
+        let json: Value = serde_json::from_str(json)?;
+        if !json.is_object() {
+            bail!("invalid_block_format");
+        }
+        let blockobj = json.as_object().unwrap();
         Ok(blockobj.clone())
     }
 
@@ -1837,7 +1837,7 @@ impl Melda {
                                 );
                                 cs.push(Change(uuid.to_string(), r, Some(prev)));
                             } else {
-                                bail!("instatus_changes_record")
+                                bail!("invalid_changes_record")
                             }
                         }
                     }
