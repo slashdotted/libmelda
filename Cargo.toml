@@ -1,6 +1,6 @@
 [package]
 name = "melda"
-version = "0.1.11"
+version = "0.1.12"
 authors = ["Amos Brocco <amos.brocco@supsi.ch>"]
 edition = "2018"
 license = "GPL-3.0"
@@ -34,10 +34,14 @@ cacache = { version = "8.0.0", optional = true }
 base64 = { version = "0.13.0", optional = true }
 rusqlite = { version = "0.27.0", optional = true }
 
+# Brotli Adapter dependencies
+brotli = { version = "3.3.4", optional = true }
+
 [features]
-default = [ "solid", "sqlitedb" ]
+default = [ "solid", "sqlitedb", "brotliadapter" ]
 solid =  [ "reqwest", "rio_api", "rio_turtle", "oxiri", "cacache"]
 sqlitedb = [ "rusqlite", "base64"]
+brotliadapter = [ "brotli" ]
 
 [dev-dependencies]
 mktemp = "0.3.1"

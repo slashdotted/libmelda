@@ -16,7 +16,7 @@ melda = { git = "https://github.com/slashdotted/libmelda" }
 or
 
 ```
-melda = "0.1.10"
+melda = "0.1.12"
 ```
 
 If using the [crate](https://crates.io/crates/melda)  from [crates.io](https://crates.io/crates/melda) adapt the version string as needed. Then import the required modules. For this example you will need:

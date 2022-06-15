@@ -15,29 +15,28 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 use crate::adapter::Adapter;
 use anyhow::Result;
-use flate2::{read::DeflateDecoder, write::DeflateEncoder, Compression};
 use std::{
-    io::{Read, Write},
+    io::Read,
     sync::{Arc, RwLock},
 };
 
-/// Implements compressed storage (using DEFLATE) on other adapters
-pub struct Flate2Adapter {
+/// Implements compressed storage (using Brotli) on other adapters
+pub struct BrotliAdapter {
     backend: Arc<RwLock<Box<dyn Adapter>>>,
 }
 
-impl Flate2Adapter {
+impl BrotliAdapter {
     /// Creates a new adapter wrapping the specified adapter
     ///
     /// # Arguments
     ///
     /// * `backend` - The adapter to be wrapped
     pub fn new(backend: Arc<RwLock<Box<dyn Adapter>>>) -> Self {
-        Flate2Adapter { backend }
+        BrotliAdapter { backend }
     }
 }
 
-impl Adapter for Flate2Adapter {
+impl Adapter for BrotliAdapter {
     /// Reads an object or a sub-object from the backend storage. When offset and length are both 0
     /// the full object is returned, otherwise the sub-object is returned
     ///
@@ -48,11 +47,10 @@ impl Adapter for Flate2Adapter {
     /// * `length` - The length of the sub-object (in bytes) in the associated data pack
     ///     
     fn read_object(&self, key: &str, offset: usize, length: usize) -> Result<Vec<u8>> {
-        let key = key.to_string() + ".flate"; // Change key to avoid mismatching cache objects
+        let key = key.to_string() + ".brotli"; // Change key to avoid mismatching cache objects
         let data = self.backend.read().unwrap().read_object(&key, 0, 0)?;
-        let mut d = DeflateDecoder::new(data.as_slice());
         let mut datavec = vec![];
-        d.read_to_end(&mut datavec)?;
+        brotli::Decompressor::new(data.as_slice(), 4096).read_to_end(&mut datavec)?;
         if offset == 0 && length == 0 {
             Ok(datavec)
         } else {
@@ -67,14 +65,11 @@ impl Adapter for Flate2Adapter {
     /// * `key` - The key associated with the object
     /// * `data` - The content of the object    
     fn write_object(&self, key: &str, data: &[u8]) -> Result<()> {
-        let key = key.to_string() + ".flate"; // Change key to avoid mismatching cache objects
-        let mut e = DeflateEncoder::new(Vec::new(), Compression::default());
-        e.write_all(data)?;
-        let compressed = e.finish().unwrap();
-        self.backend
-            .write()
-            .unwrap()
-            .write_object(&key, compressed.as_slice())
+        let key = key.to_string() + ".brotli"; // Change key to avoid mismatching cache objects
+        let mut compressor = brotli::CompressorReader::new(data, 4096, 11, 22);
+        let mut buffer = vec![];
+        compressor.read_to_end(&mut buffer)?;
+        self.backend.write().unwrap().write_object(&key, &buffer)
     }
 
     /// Lists the keys of all objects whose key ends with ext. If ext is an empty string, all objects are returned.
@@ -83,23 +78,23 @@ impl Adapter for Flate2Adapter {
     ///
     /// * `ext` - The extension (last part of the string) of the requested objects     
     fn list_objects(&self, ext: &str) -> Result<Vec<String>> {
-        let ext = ext.to_string() + ".flate"; // Change key to avoid mismatching cache objects
+        let ext = ext.to_string() + ".brotli"; // Change key to avoid mismatching cache objects
         let result = self.backend.read().unwrap().list_objects(&ext)?;
         Ok(result
             .into_iter()
-            .map(|k| k.trim_end_matches(".flate").to_string())
+            .map(|k| k.trim_end_matches(".brotli").to_string())
             .collect())
     }
 }
 
 mod tests {
     #[allow(unused_imports)]
-    use crate::{adapter::Adapter, flate2adapter::Flate2Adapter, memoryadapter::MemoryAdapter};
+    use crate::{adapter::Adapter, brotliadapter::BrotliAdapter, memoryadapter::MemoryAdapter};
 
     #[test]
     fn test_read_object() {
         let ma: Box<dyn Adapter> = Box::new(MemoryAdapter::new());
-        let sqa = Flate2Adapter::new(std::sync::Arc::new(std::sync::RwLock::new(ma)));
+        let sqa = BrotliAdapter::new(std::sync::Arc::new(std::sync::RwLock::new(ma)));
         assert!(sqa.list_objects(".delta").unwrap().is_empty());
         assert!(sqa
             .write_object("somekey.delta", "somedata".as_bytes())
@@ -122,7 +117,7 @@ mod tests {
     #[test]
     fn test_write_object() {
         let ma: Box<dyn Adapter> = Box::new(MemoryAdapter::new());
-        let sqa = Flate2Adapter::new(std::sync::Arc::new(std::sync::RwLock::new(ma)));
+        let sqa = BrotliAdapter::new(std::sync::Arc::new(std::sync::RwLock::new(ma)));
         assert!(sqa.list_objects(".delta").unwrap().is_empty());
         assert!(sqa
             .write_object("somekey.delta", "somedata".as_bytes())
@@ -165,7 +160,7 @@ mod tests {
     #[test]
     fn test_list_objects() {
         let ma: Box<dyn Adapter> = Box::new(MemoryAdapter::new());
-        let sqa = Flate2Adapter::new(std::sync::Arc::new(std::sync::RwLock::new(ma)));
+        let sqa = BrotliAdapter::new(std::sync::Arc::new(std::sync::RwLock::new(ma)));
         assert!(sqa.list_objects(".delta").unwrap().is_empty());
         assert!(sqa
             .write_object("somekey.delta", "somedata".as_bytes())
