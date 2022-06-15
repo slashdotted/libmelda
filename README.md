@@ -19,7 +19,7 @@ or
 melda = "0.1.10"
 ```
 
-If using the crate from [crates.io](https://crates.io/crates/melda) adapt the version strink as needed. Then import the required modules. For this example you will need:
+If using the [crate](https://crates.io/crates/melda)  from [crates.io](https://crates.io/crates/melda) adapt the version string as needed. Then import the required modules. For this example you will need:
 
 ```rust
 use melda::{filesystemadapter::FilesystemAdapter, melda::Melda};
