@@ -1706,7 +1706,7 @@ impl Melda {
         let digest = digest_bytes(data.as_slice());
         if !digest.eq(blockid) {
             bail!("mismatching_block_hash");
-        };        
+        }
         let json = std::str::from_utf8(&data)?;
         let json: Value = serde_json::from_str(json)?;
         if !json.is_object() {
