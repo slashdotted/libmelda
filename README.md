@@ -16,10 +16,10 @@ melda = { git = "https://github.com/slashdotted/libmelda" }
 or
 
 ```
-melda = "0.1.7"
+melda = "0.1.10"
 ```
 
-Then import the required modules. For this example you will need:
+If using the crate from [crates.io](https://crates.io/crates/melda) adapt the version strink as needed. Then import the required modules. For this example you will need:
 
 ```rust
 use melda::{filesystemadapter::FilesystemAdapter, melda::Melda};
