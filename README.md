@@ -125,16 +125,16 @@ Valid schemes for the **get_adapter** function are:
 | ----------------- | ------------------------------------------------------------- | -------------------------- |
 | In memory (memory://)           | memory://                  | |
 | In memory w/Deflate compression (memory+flate://)           | memory+flate://   |  |
-| In memory w/Brotli compression (memory+brotli://)           | memory+brotly://   |  |
+| In memory w/Brotli compression (memory+brotli://)           | memory+brotli://   |  |
 | Folder (file://)           | file://$(pwd)/mycrdtdocument                   | The absolute path of a folder (can be on a network share) |
 | Folder w/Deflate compression (file+flate://)           | file+flate://$(pwd)/mycrdtdocument     | The absolute path of a folder (can be on a network share) |
-| Folder w/Brotli compression (file+brotli://)           | file+brotly://$(pwd)/mycrdtdocument     | The absolute path of a folder (can be on a network share) |
+| Folder w/Brotli compression (file+brotli://)           | file+brotli://$(pwd)/mycrdtdocument     | The absolute path of a folder (can be on a network share) |
 | [Solid](https://solidproject.org/) Pod (solid://)           | solid://anuser.solidcommunity.net/mycrdtdocument | The URL of a [Solid](https://solidproject.org/) Pod |
 | [Solid](https://solidproject.org/) Pod w/Deflate compression (solid+flate://)            | solid+flate://anuser.solidcommunity.net/mycrdtdocument  | The URL of a [Solid](https://solidproject.org/) Pod |                                                      |
-| [Solid](https://solidproject.org/) Pod w/Brotli compression (solid+brotli://)            | solid+brotly://anuser.solidcommunity.net/mycrdtdocument  | The URL of a [Solid](https://solidproject.org/) Pod |                                                      |
+| [Solid](https://solidproject.org/) Pod w/Brotli compression (solid+brotli://)            | solid+brotli://anuser.solidcommunity.net/mycrdtdocument  | The URL of a [Solid](https://solidproject.org/) Pod |                                                      |
 | SQLite (sqlite://)           | sqlite://mycrdtdocument                   | The name of the database is required (use **:memory:** for in-memory storage) |
 | SQLite w/Deflate compression (sqlite+flate://)           | sqlite+flate://mycrdtdocument     | The name of the database is required (use **:memory:** for in-memory storage) |
-| SQLite w/Brotli compression (sqlite+brotli://)           | sqlite+flate://mycrdtdocument     | The name of the database is required (use **:memory:** for in-memory storage) |
+| SQLite w/Brotli compression (sqlite+brotli://)           | sqlite+brotli://mycrdtdocument     | The name of the database is required (use **:memory:** for in-memory storage) |
  
 For [Solid](https://solidproject.org/) Pod's access, a username and a password are required.
 
