@@ -88,6 +88,31 @@ impl Melda {
         Ok(dc)
     }
 
+    /// Initializes a new Melda data structure using the provided Url
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - The backend adapter Url used to persist the data on commit
+    ///
+    /// # Example
+    /// ```
+    /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
+    /// use std::sync::{Arc, Mutex, RwLock};
+    /// use serde_json::{Map, Value,json};
+    /// let mut replica = Melda::new_from_url("memory+flate://").expect("cannot_initialize_crdt");
+    /// ```
+    pub fn new_from_url(url: &str) -> Result<Melda> {
+        let adapter = Arc::new(RwLock::new(crate::adapter::get_adapter(url).unwrap()));
+        let mut dc = Melda {
+            documents: RwLock::new(BTreeMap::<String, RevisionTree>::new()),
+            data: RwLock::new(DataStorage::new(adapter.clone())),
+            stage: RwLock::new(Vec::<Change>::new()),
+            blocks: RwLock::new(BTreeMap::new()),
+        };
+        dc.reload()?;
+        Ok(dc)
+    }
+
     /// Initializes a new Melda data structure using the provided adapter and loads until the given block
     ///
     /// # Arguments
@@ -123,6 +148,26 @@ impl Melda {
     /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
     /// ```
     pub fn new_until(adapter: Arc<RwLock<Box<dyn Adapter>>>, block: &str) -> Result<Melda> {
+        let mut dc = Melda {
+            documents: RwLock::new(BTreeMap::<String, RevisionTree>::new()),
+            data: RwLock::new(DataStorage::new(adapter.clone())),
+            stage: RwLock::new(Vec::<Change>::new()),
+            blocks: RwLock::new(BTreeMap::new()),
+        };
+        dc.reload_until(block)?;
+        Ok(dc)
+    }
+
+    /// Initializes a new Melda data structure using the provided Url and loads until the given block
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - The backend Url used to persist the data on commit
+    /// * `block` - Block identifier
+    ///
+    /// ```
+    pub fn new_from_url_until(url: &str, block: &str) -> Result<Melda> {
+        let adapter = Arc::new(RwLock::new(crate::adapter::get_adapter(url).unwrap()));
         let mut dc = Melda {
             documents: RwLock::new(BTreeMap::<String, RevisionTree>::new()),
             data: RwLock::new(DataStorage::new(adapter.clone())),

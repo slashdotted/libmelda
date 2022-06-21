@@ -16,7 +16,7 @@ melda = { git = "https://github.com/slashdotted/libmelda" }
 or
 
 ```
-melda = "0.1.13"
+melda = "0.1.14"
 ```
 
 If using the [crate](https://crates.io/crates/melda)  from [crates.io](https://crates.io/crates/melda) adapt the version string as needed. Then import the required modules. For this example you will need:
@@ -117,8 +117,9 @@ let adapter = Box::new(Flate2Adapter::new(Arc::new(RwLock::new(Box::new(
 
 Alternatively you can use the **get_adapter** function to initialize an adapter from an Url:
 ```rust
-let adapter = get_adapter(&url::Url::parse("file+flate://todolist").unwrap(), None, None).unwrap();
+let adapter = get_adapter("file+flate://todolist").unwrap();
 ```
+
 Valid schemes for the **get_adapter** function are:
 
 | Storage type      | Example path                                              | Description |
@@ -144,6 +145,11 @@ To initialize Melda we use the **new** method, passing the chosen adapter:
 ```rust
 let mut m = Melda::new(Arc::new(RwLock::new(adapter))).expect("Failed to inizialize Melda");
 ```
+or you can use an Url
+```rust
+let mut m = Melda::new_from_url("file+flate://todolist").expect("Failed to inizialize Melda");
+```
+
 Please note that we can remove the **mut** modifier if we only intend to read the CRDT.
 
 ## Updating the CRDT

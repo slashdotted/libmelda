@@ -19,28 +19,28 @@ use anyhow::Result;
 ///
 /// # Arguments
 ///
-/// * `url` - An Url for the adapter
-/// * `username` - Optional username for authentication (for example, with Solid)
-/// * `password` - Optional password for authentication (for example, with Solid)
+/// * `url` - An Url for the adapter (username and passwords can be encoded)
 ///
 /// # Example
 /// ```
 /// use melda::{melda::Melda, adapter::get_adapter};
 /// use std::sync::{Arc, Mutex, RwLock};
 /// use serde_json::{Map, Value,json};
-/// let adapter = get_adapter(&url::Url::parse("memory://").unwrap(), None, None).unwrap();
+/// let adapter = get_adapter("memory+flate://").unwrap();
 /// let mut replica = Melda::new(Arc::new(RwLock::new(adapter))).expect("cannot_initialize_crdt");
 /// ```
-pub fn get_adapter(
-    url: &reqwest::Url,
-    username: Option<String>,
-    password: Option<String>,
-) -> Result<Box<dyn Adapter>> {
+pub fn get_adapter(url: &str) -> Result<Box<dyn Adapter>> {
+    let url = url::Url::parse(url).expect("invalid_url");
+    let username = if url.username().is_empty() {
+        None
+    } else {
+        Some(url.username().to_string())
+    };
+    let password = url.password().map(|s| s.to_string());
     let mut adapter: Option<Box<dyn Adapter>> = None;
-
-    if url.scheme().eq("memory") {
+    if url.scheme().starts_with("memory") {
         adapter = Some(Box::new(crate::memoryadapter::MemoryAdapter::new()));
-    } else if url.scheme().eq("file") {
+    } else if url.scheme().starts_with("file") {
         adapter = Some(Box::new(
             crate::filesystemadapter::FilesystemAdapter::new(url.path())
                 .expect("cannot_initialize_adapter"),
