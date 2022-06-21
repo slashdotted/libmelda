@@ -1,6 +1,6 @@
 [package]
 name = "melda"
-version = "0.1.14"
+version = "0.1.15"
 authors = ["Amos Brocco <amos.brocco@supsi.ch>"]
 edition = "2018"
 license = "GPL-3.0"

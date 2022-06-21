@@ -432,7 +432,7 @@ impl DataStorage {
                     })
                     .collect()
             }
-            FetchedObject::Full(_) => bail!("expecting_delta_object"),
+            FetchedObject::Full(o) => Ok(o),
         }
     }
 
