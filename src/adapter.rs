@@ -61,7 +61,7 @@ pub fn get_adapter(
     #[cfg(feature = "sqlitedb")]
     if url.scheme().starts_with("sqlite") && !url.path().eq(":memory:") {
         adapter = Some(Box::new(crate::sqliteadapter::SqliteAdapter::new(
-            &url.path().to_string(),
+            url.path(),
         )));
     } else if url.scheme().starts_with("sqlite") {
         adapter = Some(Box::new(

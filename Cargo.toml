@@ -9,7 +9,7 @@ homepage = "https://github.com/slashdotted/libmelda"
 repository = "https://github.com/slashdotted/libmelda"
 
 [dependencies]
-yavomrs = "0.1.0"
+yavomrs = "0.1.1"
 rust-crypto = "0.2.36"
 regex = "1.5.4"
 serde_json = "1.0"

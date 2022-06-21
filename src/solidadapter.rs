@@ -216,7 +216,7 @@ impl SolidAdapter {
     fn list_container(
         &self,
         ext: &str,
-        target: &String,
+        target: &str,
         restype: ResourceType,
     ) -> Result<Vec<String>> {
         let mut list = vec![];
@@ -228,7 +228,7 @@ impl SolidAdapter {
         let ldp_resource = NamedNode {
             iri: "http://www.w3.org/ns/ldp#Resource",
         };
-        let base_iri = Iri::parse(target.clone()).unwrap();
+        let base_iri = Iri::parse(target.to_string()).unwrap();
         TurtleParser::new(data.as_bytes(), Some(base_iri)).parse_all(&mut |t| {
             if t.predicate == rdf_type && t.object == ldp_resource.into() {
                 if let rio_api::model::Subject::NamedNode(nn) = t.subject {

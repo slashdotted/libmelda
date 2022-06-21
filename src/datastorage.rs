@@ -479,31 +479,29 @@ impl DataStorage {
                                             let non_delta_corresponding_field = k
                                                 .strip_prefix(DELTA_PREFIX)
                                                 .ok_or_else(|| anyhow!("prefix_disappeared"))?;
-                                            match leaf_object.get(non_delta_corresponding_field) {
-                                                Some(v) => {
-                                                    if v.is_array() {
-                                                        merge_arrays(
-                                                            v.as_array().unwrap(),
-                                                            &mut base_array,
-                                                        )
-                                                    }
+                                            if let Some(v) =
+                                                leaf_object.get(non_delta_corresponding_field)
+                                            {
+                                                if v.is_array() {
+                                                    merge_arrays(
+                                                        v.as_array().unwrap(),
+                                                        &mut base_array,
+                                                    )
                                                 }
-                                                None => {}
                                             }
                                         } else {
                                             // If we have a non-delta field in the base_object then maybe the leaf has a delta field
                                             let delta_corresponding_field =
                                                 DELTA_PREFIX.to_string() + k.as_str();
-                                            match leaf_object.get(&delta_corresponding_field) {
-                                                Some(v) => {
-                                                    if v.is_array() {
-                                                        merge_arrays(
-                                                            v.as_array().unwrap(),
-                                                            &mut base_array,
-                                                        )
-                                                    }
+                                            if let Some(v) =
+                                                leaf_object.get(&delta_corresponding_field)
+                                            {
+                                                if v.is_array() {
+                                                    merge_arrays(
+                                                        v.as_array().unwrap(),
+                                                        &mut base_array,
+                                                    )
                                                 }
-                                                None => {}
                                             }
                                         }
                                     }

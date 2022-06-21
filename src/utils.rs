@@ -100,7 +100,7 @@ pub fn get_identifier(value: &Map<String, Value>, path: &[String]) -> String {
 }
 
 /// Merges an array M into another array N
-pub fn merge_arrays(order_m: &Vec<Value>, order_n: &mut Vec<Value>) {
+pub fn merge_arrays(order_m: &[Value], order_n: &mut Vec<Value>) {
     if order_n.is_empty() {
         order_m.iter().for_each(|t| order_n.push(t.clone()));
         return;
@@ -146,14 +146,14 @@ pub fn merge_arrays(order_m: &Vec<Value>, order_n: &mut Vec<Value>) {
 pub fn flatten(
     c: &mut HashMap<String, Map<String, Value>>,
     value: &Value,
-    path: &Vec<String>,
+    path: &[String],
 ) -> Value {
     match value {
         Value::String(s) => Value::from(escape(s)),
         Value::Array(a) => Value::from(a.iter().map(|v| flatten(c, v, path)).collect::<Vec<_>>()),
         Value::Object(o) => {
             let uuid = get_identifier(o, path);
-            let mut fpath = path.clone();
+            let mut fpath = path.to_owned();
             fpath.push(uuid.clone());
             let no: Map<String, Value> = o
                 .into_iter()
@@ -207,7 +207,7 @@ pub fn unflatten(c: &HashMap<String, Map<String, Value>>, value: &Value) -> Opti
 }
 
 /// Creates an array diff patch
-pub fn make_diff_patch(old: &Vec<Value>, new: &Vec<Value>) -> Result<Vec<Value>> {
+pub fn make_diff_patch(old: &[Value], new: &[Value]) -> Result<Vec<Value>> {
     let ops = myers_unfilled(old, new);
     let mut patch = vec![];
     for o in ops {
@@ -233,7 +233,7 @@ pub fn make_diff_patch(old: &Vec<Value>, new: &Vec<Value>) -> Result<Vec<Value>>
 }
 
 /// Applies a patch to the given array
-pub fn apply_diff_patch(old: &mut Vec<Value>, patch: &Vec<Value>) -> Result<()> {
+pub fn apply_diff_patch(old: &mut Vec<Value>, patch: &[Value]) -> Result<()> {
     for op in patch {
         let operation = op[0]
             .as_str()
@@ -291,7 +291,7 @@ mod tests {
     #[test]
     fn test_unescape() {
         assert!(unescape("!hello world") == "hello world");
-        assert!(unescape("!") == "");
+        assert!(unescape("!").is_empty());
         assert!(unescape("!!") == "!");
     }
 
