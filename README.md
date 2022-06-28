@@ -181,7 +181,7 @@ todolist/
     └── b4e50e445542c4737f4cfd7a9193ffd3be3794049d361d114a44f36434257cb3.pack
 ```
 
-The **.delta** file is called **delta block**, and contains the versioning information of each object in the CRDT, wherease the **.pack** file is the **data pack** which stores the actual JSON content of each object. Each commit produces a new delta block (with a different name, which corresponds to the hash digest of its content) and possibly a data pack (if new JSON values are produced). The directory structure of the **todolist** directory organizes files into sub-directories according to their prefix. 
+The **.delta** file is called **delta block**, and contains the versioning information of each object in the CRDT, whereas the **.pack** file is the **data pack** which stores the actual JSON content of each object. Each commit produces a new delta block (with a different name, which corresponds to the hash digest of its content) and possibly a data pack (if new JSON values are produced). The directory structure of the **todolist** directory organizes files into sub-directories according to their prefix. 
 
 We can perform another update using (again) the **update** method and commit the resulting changes:
 ```rust
