@@ -385,6 +385,10 @@ Amos Brocco "Melda: A General Purpose Delta State JSON CRDT". 9th Workshop on Pr
 ## 2021
 Amos Brocco "Delta-State JSON CRDT: Putting Collaboration on Solid Ground". (Brief announcement). 23rd International Symposium on Stabilization, Safety, and Security of Distributed Systems (SSS 2021). November 2021. 
 
+# Contact
+
+amos _dot_ brocco _at_ supsi _dot_ ch
+
 # License
 (c)2021-2022 Amos Brocco,
 GPL v3 (for now... but I will evaluate a change of license - to something like BSD3/MIT/... in the near future)
