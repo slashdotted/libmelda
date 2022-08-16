@@ -14,12 +14,9 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 use crate::adapter::Adapter;
-use crate::constants::{DELTA_PREFIX, HASH_FIELD, INDEX_EXTENSION, PACK_EXTENSION};
+use crate::constants::{HASH_FIELD, INDEX_EXTENSION, PACK_EXTENSION};
 use crate::revision::Revision;
-use crate::revisiontree::RevisionTree;
-use crate::utils::{
-    apply_diff_patch, digest_bytes, is_flattened_field, make_diff_patch, merge_arrays,
-};
+use crate::utils::digest_bytes;
 use anyhow::{anyhow, bail, Result};
 use lru::LruCache;
 use serde_json::json;
@@ -33,21 +30,13 @@ use std::sync::{Arc, Mutex, RwLock};
 pub struct DataStorage {
     adapter: Arc<RwLock<Box<dyn Adapter>>>,
     stage: HashMap<String, Value>,
-    objects: HashMap<String, (String, usize, usize)>,
+    values: HashMap<String, (String, usize, usize)>,
     loaded_packs: BTreeSet<String>,
     cache: Mutex<RefCell<LruCache<String, Map<String, Value>>>>,
     force_full_array_interval: u32,
 }
 
-enum FetchedObject {
-    Delta(Map<String, Value>),
-    Full(Map<String, Value>),
-}
 
-struct ReconstructionPath<'a> {
-    origin: Map<String, Value>,
-    path: Vec<&'a Revision>,
-}
 
 impl DataStorage {
     /// Constructs a new Data storage based on the provided adapter
@@ -63,7 +52,7 @@ impl DataStorage {
         DataStorage {
             adapter,
             stage: HashMap::<String, Value>::new(),
-            objects: HashMap::<String, (String, usize, usize)>::new(),
+            values: HashMap::<String, (String, usize, usize)>::new(),
             loaded_packs: BTreeSet::new(),
             cache: Mutex::new(RefCell::new(LruCache::<String, Map<String, Value>>::new(
                 cache_size,
@@ -74,26 +63,24 @@ impl DataStorage {
 
     /// Merges another DataStorage into this one
     pub fn merge(&mut self, other: &DataStorage) -> Result<()> {
-        other.objects.keys().for_each(|digest| {
-            if !self.objects.contains_key(digest) && !self.stage.contains_key(digest) {
-                self.write_data(
+        other.values.keys().for_each(|digest| {
+            if !self.values.contains_key(digest) && !self.stage.contains_key(digest) {
+                self.write_raw_value(
                     digest,
                     other
-                        .read_data(digest)
+                        .read_raw_value(digest)
                         .expect("failed_to_read_data")
-                        .expect("no_data"),
                 )
                 .expect("failed_to_write_data");
             }
         });
         other.stage.keys().for_each(|digest| {
-            if !self.objects.contains_key(digest) && !self.stage.contains_key(digest) {
-                self.write_data(
+            if !self.values.contains_key(digest) && !self.stage.contains_key(digest) {
+                self.write_raw_value(
                     digest,
                     other
-                        .read_data(digest)
+                        .read_raw_value(digest)
                         .expect("failed_to_read_data")
-                        .expect("no_data"),
                 )
                 .expect("failed_to_write_data");
             }
@@ -127,7 +114,7 @@ impl DataStorage {
                 if flag == 0 {
                     let digest = digest_bytes(&data[obj_start..offset + 1]);
                     let count = offset + 1 - obj_start;
-                    self.objects
+                    self.values
                         .insert(digest, (name.to_string(), obj_start, count));
                 };
             }
@@ -141,7 +128,7 @@ impl DataStorage {
             let d = v.as_array().unwrap();
             let offset = d[0].as_i64().unwrap() as usize;
             let count = d[1].as_i64().unwrap() as usize;
-            self.objects
+            self.values
                 .insert(k.clone(), (index.to_string(), offset, count));
         }
         Ok(())
@@ -171,7 +158,7 @@ impl DataStorage {
             bail!("non_empty_data_stage");
         }
         self.loaded_packs.clear();
-        self.objects.clear();
+        self.values.clear();
         let pack_list = self.adapter.read().unwrap().list_objects(PACK_EXTENSION)?;
         let index_list = self.adapter.read().unwrap().list_objects(INDEX_EXTENSION)?;
         let index_set = index_list.into_iter().collect::<HashSet<_>>();
@@ -234,8 +221,8 @@ impl DataStorage {
     pub fn replicate(&mut self, other: &DataStorage) -> Result<()> {
         for p in &other.loaded_packs {
             if !self.loaded_packs.contains(p) {
-                let rawdata = self.read_raw_object(p, 0, 0)?;
-                self.write_raw_object(p, &rawdata)?;
+                let rawdata = self.read_raw_bytes(p, 0, 0)?;
+                self.write_raw_bytes(p, &rawdata)?;
             }
         }
         Ok(())
@@ -245,27 +232,16 @@ impl DataStorage {
     pub fn write_object(
         &mut self,
         rev: &Revision,
-        obj: Map<String, Value>,
-        delta: Option<Map<String, Value>>,
+        obj: Map<String, Value>
     ) -> Result<()> {
         if rev.is_resolved() || rev.is_deleted() || rev.is_empty() {
             Ok(())
-        } else if rev.is_delta() && delta.is_some() {
-            // If the revision is a delta revision, store according to the delta digest
-            let delta_obj = delta.unwrap();
-            self.write_data(rev.delta_digest.as_ref().unwrap(), Value::from(delta_obj))?;
-            {
-                let cache_l = self.cache.lock().unwrap();
-                let mut cache = cache_l.borrow_mut();
-                cache.put(rev.digest.to_string(), obj); // Only cache the full object
-            }
-            Ok(())
         } else {
-            // Otherwise store according to the full object digest
+            // Otherwise store according to the object digest
             if rev.digest.len() <= 8 && u32::from_str_radix(&rev.digest, 16).is_ok() {
                 Ok(())
             } else {
-                self.write_data(&rev.digest, obj.clone().into())?;
+                self.write_raw_value(&rev.digest, obj.clone().into())?;
                 {
                     let cache_l = self.cache.lock().unwrap();
                     let mut cache = cache_l.borrow_mut();
@@ -276,6 +252,8 @@ impl DataStorage {
         }
     }
 
+
+/*
     fn build_reconstruction_path<'a>(
         &self,
         fromrev: &'a Revision,
@@ -304,8 +282,8 @@ impl DataStorage {
                     origin: cache.get(&crev.digest).unwrap().clone(),
                     path: reconstruction_path,
                 });
-            } else if !crev.is_delta() {
-                // We reached the first revision or a non-delta revision
+            } else if !crev.index == 1 {
+                // We reached the first revision (a non-delta revision)
                 // Otherwise read the data from the backend adapter
                 match self.read_data(&crev.digest)? {
                     Some(o) => {
@@ -337,48 +315,50 @@ impl DataStorage {
         }
     }
 
-    /// Returns the object at the given revision (the resulting object is not undelta nor merged)
-    fn read_object_or_delta(&self, rev: &Revision) -> Result<FetchedObject> {
-        assert!(!rev.is_resolved());
-        if rev.is_deleted() {
-            // Special case, deleted object
-            Ok(FetchedObject::Full(
-                json!({"_deleted":true}).as_object().unwrap().clone(),
-            ))
-        } else if rev.is_empty() {
-            // Special case, empty object
-            Ok(FetchedObject::Full(Map::<String, Value>::new()))
-        } else {
-            // Try to read the object by full digest
-            match self.read_data(&rev.digest)? {
-                Some(o) => {
-                    let obj = o.as_object().ok_or_else(|| anyhow!("not_an_object"))?;
-                    Ok(FetchedObject::Full(obj.clone()))
-                }
-                None => {
-                    // Try to read the object by delta digest
-                    match &rev.delta_digest {
-                        Some(dd) => match self.read_data(dd)? {
-                            Some(o) => {
-                                let obj = o.as_object().ok_or_else(|| anyhow!("not_an_object"))?;
-                                Ok(FetchedObject::Delta(obj.clone()))
+
+    /// Reads and returns an array descriptor, reconstructing deltas if necessary
+    pub fn read_array_descriptor(&self, rev: &Revision, rt: &RevisionTree) -> Result<Vec<String>> {
+        if rev.index == 1 { // First revision
+
+        }
+
+
+        // Determine the reconstruction path
+        let rb = self.build_reconstruction_path(rev, rt)?;
+        // Obtain the origin array
+        let mut origin = rb.origin;
+        let mut order_array;
+        if let Some(base_array) = origin.get(ARRAY_DESCRIPTOR_ORDER_FIELD) {
+            if let Some(base_array) = base_array.as_array() {
+                order_array = base_array;
+            } else {
+                bail!(anyhow!("malformed_origin_array_descriptor"))
+            }
+        }
+        if let Some(base_array) = origin.get(ARRAY_DESCRIPTOR_DELTA_ORDER_FIELD) {
+            for r in rb.path.into_iter().rev() {
+                // Obtain corresponding object
+                if let Ok(Some(delta_descriptor)) = self.read_data(&r.digest) {
+                    if let Some(delta_descriptor) = delta_descriptor.as_object() {
+                        if let Some(patch) = delta_descriptor.get(ARRAY_DESCRIPTOR_ORDER_FIELD) {
+                            if let Some(patch) = patch.as_array() {
+                                // Apply patch
+                                apply_diff_patch(&mut order_array, &patch)?;
+                            } else {
+                                bail!(anyhow!("malformed_array_descriptor"))
                             }
-                            None => Err(anyhow!("failed_to_read_delta_object {}", dd)),
-                        },
-                        None => Err(anyhow!("failed_to_read_object {}", rev.to_string())),
+                        } else {
+                            bail!(anyhow!("incomplete_array_descriptor"))
+                        }
+                    } else {
+                        bail!(anyhow!("descriptor_not_an_object"))
                     }
                 }
             }
+        } else {
+            bail!(anyhow!("invalid_origin_array_descriptor"))
         }
-    }
-
-    /// Reads and returns an object, resolving deltas if necessary
-    fn read_full_object(&self, rev: &Revision, rt: &RevisionTree) -> Result<Map<String, Value>> {
-        let rb = self.build_reconstruction_path(rev, rt)?;
-        let mut origin = rb.origin;
-        for r in rb.path.into_iter().rev() {
-            origin = self.apply_delta(r, &origin)?
-        }
+        // Update cache
         {
             let cache_l = self.cache.lock().unwrap();
             let mut cache = cache_l.borrow_mut();
@@ -386,247 +366,43 @@ impl DataStorage {
                 cache.put(rev.digest.to_string(), origin.clone());
             }
         }
-        Ok(origin)
-    }
-
-    // Applies a delta revision object to a reference object
-    fn apply_delta(
-        &self,
-        delta_revision: &Revision,
-        delta_reference_object: &Map<String, Value>,
-    ) -> Result<Map<String, Value>> {
-        let obj = self.read_object_or_delta(delta_revision)?;
-        match obj {
-            FetchedObject::Delta(obj) => {
-                obj.into_iter()
-                    .map(|(k, v)| {
-                        if k.starts_with(DELTA_PREFIX) {
-                            let changes = v.as_array().ok_or_else(|| anyhow!("not_an_array"))?;
-                            let non_delta_corresponding_field =
-                                k.strip_prefix(DELTA_PREFIX).unwrap();
-                            // Get the reference field (either as delta or non delta)
-                            let base_array = if delta_reference_object.contains_key(&k) {
-                                delta_reference_object
-                                    .get(&k)
-                                    .unwrap()
-                                    .as_array()
-                                    .ok_or_else(|| anyhow!("not_an_array"))?
-                            } else if delta_reference_object
-                                .contains_key(non_delta_corresponding_field)
-                            {
-                                delta_reference_object
-                                    .get(non_delta_corresponding_field)
-                                    .unwrap()
-                                    .as_array()
-                                    .ok_or_else(|| anyhow!("not_an_array"))?
-                            } else {
-                                bail!("missing_referenced_field")
-                            };
-                            // Apply patch
-                            let mut base_array = base_array.clone();
-                            apply_diff_patch(&mut base_array, changes)?;
-                            Ok((k, Value::from(base_array)))
-                        } else {
-                            Ok((k, v))
-                        }
-                    })
-                    .collect()
-            }
-            FetchedObject::Full(o) => Ok(o),
-        }
-    }
-
-    /// Merges the arrays within leaf revisions
-    /// This is needed because we do not want that objects added to the array
-    /// just disappear when there are conflicting revisions
-    fn read_merged_object(
-        &self,
-        base_revision: &Revision,
-        rt: &RevisionTree,
-    ) -> Result<Map<String, Value>> {
-        let leafs = rt.get_leafs();
-        // The base object corresponds to the revision we want to keep
-        let base_object = self.read_full_object(base_revision, rt)?;
-        if leafs.len() > 1 {
-            // If there are multiple leafs, merge (leafs are merged in the same order on each
-            // replica, as leafs() is a BTreeSet, an ordered data structure)
-            // therefore, if items are moved the order will remain the same on each replica
-            // The base order is given by the winner (longest branch wins)
-            let merged_object = base_object
-                .into_iter()
-                .map(|(k, v)| -> Result<(String, Value)> {
-                    // Iterate over all fields and if the field is a flatten field, try to merge the contents
-                    if is_flattened_field(k.as_str()) {
-                        let mut base_array = v.as_array().unwrap().clone();
-                        // Important: the ordering is given by taking conflicting revisions in the
-                        // reverse order.
-                        for leaf_revision in leafs.iter().rev() {
-                            // This is true for the first leaf
-                            if **leaf_revision != *base_revision {
-                                let leaf_object = self.read_full_object(leaf_revision, rt)?;
-                                // Look for the corresponding field in the leaf object (only matching fields will be merged)
-                                match leaf_object.get(&k) {
-                                    Some(v) => {
-                                        if v.is_array() {
-                                            // Match and is an array, merge
-                                            merge_arrays(v.as_array().unwrap(), &mut base_array)
-                                        }
-                                    }
-                                    None => {
-                                        // Non matching field
-                                        // If we have a delta field in the base_object then maybe the leaf has a non-delta field
-                                        if k.starts_with(DELTA_PREFIX) {
-                                            let non_delta_corresponding_field = k
-                                                .strip_prefix(DELTA_PREFIX)
-                                                .ok_or_else(|| anyhow!("prefix_disappeared"))?;
-                                            if let Some(v) =
-                                                leaf_object.get(non_delta_corresponding_field)
-                                            {
-                                                if v.is_array() {
-                                                    merge_arrays(
-                                                        v.as_array().unwrap(),
-                                                        &mut base_array,
-                                                    )
-                                                }
-                                            }
-                                        } else {
-                                            // If we have a non-delta field in the base_object then maybe the leaf has a delta field
-                                            let delta_corresponding_field =
-                                                DELTA_PREFIX.to_string() + k.as_str();
-                                            if let Some(v) =
-                                                leaf_object.get(&delta_corresponding_field)
-                                            {
-                                                if v.is_array() {
-                                                    merge_arrays(
-                                                        v.as_array().unwrap(),
-                                                        &mut base_array,
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        // Done merging
-                        Ok((k, Value::from(base_array)))
-                    } else {
-                        Ok((k, v))
-                    }
-                });
-            let result: Map<String, Value> =
-                merged_object.collect::<Result<Map<String, Value>>>()?;
-            Ok(result)
-        } else {
-            Ok(base_object)
-        }
-    }
+        Ok(order_array.iter().map(|x| x.as_str().unwrap().to_string()).collect())
+    }*/
 
     /// Reads an object at the given revision
     pub fn read_object(
         &self,
-        revision: &Revision,
-        rt: &RevisionTree,
-    ) -> Result<Map<String, Value>> {
+        revision: &Revision) -> Result<Map<String, Value>> {
         if revision.is_deleted() {
+            // Special case, deleted object
             Ok(json!({"_deleted":true}).as_object().unwrap().clone())
         } else if revision.is_resolved() {
+            // Special case, resolved object
             Ok(json!({"_resolved":true}).as_object().unwrap().clone())
         } else if revision.digest.len() <= 8 && u32::from_str_radix(&revision.digest, 16).is_ok() {
+            // Special case, simple character
             let mut o = Map::<String, Value>::new();
             o.insert(HASH_FIELD.to_string(), Value::from(revision.digest.clone()));
             Ok(o)
         } else {
-            self.read_merged_object(revision, rt)
+            let value = self.read_raw_value(&revision.digest)?;
+            let object = value.as_object().expect("expecting_an_object");
+            Ok(object.clone())
         }
     }
 
-    /// Constructs a delta object by replacing delta field values with patches from the current winner
-    /// The winner is determined from the revision tree
-    /// If a delta field cannot be replaced by a delta (because the current winner has no such field)
-    /// the field is replaced with a non delta corresponding field
-    /// The reference object (winner) is lazily costructed as soon as a delta field is detected
-    pub fn delta_object(
-        &self,
-        obj: Map<String, Value>,
-        rt: &RevisionTree,
-    ) -> Result<Option<Map<String, Value>>> {
-        // Reference object that might be loaded and used if there is a delta field
-        let mut delta_reference_object: Option<Map<String, Value>> = None;
-        let delta_reference_revision = rt.get_winner();
-        if let Some(r) = delta_reference_revision {
-            if self.force_full_array_interval != 0 && r.index % self.force_full_array_interval == 0
-            {
-                // Force a full object every N revisions
-                return Ok(None);
-            }
-        }
-        let mut contains_delta = false;
-        // Process all fields of the object
-        let delta = obj
-            .into_iter()
-            .map(|(k, v)| {
-                if k.starts_with(DELTA_PREFIX) {
-                    // If the field key starts with a delta prefix
-                    let non_delta_corresponding_field = k.strip_prefix(DELTA_PREFIX).unwrap();
-                    let array = v.as_array().ok_or_else(|| anyhow!("not_an_array"))?;
-                    if delta_reference_revision.is_none() {
-                        // Special case for first revision
-                        // Return an non delta field with all the contents of the array
-                        return Ok((k, Value::from(array.clone())));
-                    }
-                    // When not in the special case, construct the reference object upon which
-                    // changes will be constructed
-                    if delta_reference_object.is_none() {
-                        // Lazy construction based on the reference revision (the current winner)
-                        delta_reference_object =
-                            Some(self.read_full_object(delta_reference_revision.unwrap(), rt)?)
-                    }
-                    let delta_reference_object = delta_reference_object.as_ref().unwrap();
-                    // Try the same key first, then the non-delta key
-                    for key in [&k, non_delta_corresponding_field] {
-                        if delta_reference_object.contains_key(key) {
-                            // Obtain value of the field
-                            let delta_reference_array = delta_reference_object
-                                .get(key)
-                                .unwrap()
-                                .as_array()
-                                .ok_or_else(|| anyhow!("not_an_array"))?;
-                            // Compute changes
-                            let changes = make_diff_patch(delta_reference_array, array)?;
-                            contains_delta = true;
-                            // If we store changes, always assign them to the delta key
-                            return Ok((k.to_string(), Value::from(changes)));
-                        }
-                    }
-                    // If we are here the delta reference object did not contain a compatible field
-                    // We are forced to skip the delta
-                    Ok((k, Value::from(array.clone())))
-                } else {
-                    // Non delta field
-                    Ok((k, v))
-                }
-            })
-            .collect::<Result<Map<String, Value>>>()?;
-        if contains_delta {
-            Ok(Some(delta))
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// Writes the given value (object) into the temporary pack (if not already there)
-    pub fn write_data(&mut self, digest: &str, obj: Value) -> Result<()> {
-        if !self.objects.contains_key(digest) && !self.stage.contains_key(digest) {
+    /// Writes the given (JSON) value into the temporary pack (if not already there)
+    pub fn write_raw_value(&mut self, digest: &str, obj: Value) -> Result<()> {
+        if !self.values.contains_key(digest) && !self.stage.contains_key(digest) {
             self.stage.insert(digest.to_string(), obj);
         }
         Ok(())
     }
 
-    /// Reads a value given its digest
-    pub fn read_data(&self, digest: &str) -> Result<Option<Value>> {
-        if self.objects.contains_key(digest) {
-            let (pack, offset, length) = self.objects.get(digest).unwrap();
+    /// Reads a JSON value given its digest
+    pub fn read_raw_value(&self, digest: &str) -> Result<Value> {
+        if self.values.contains_key(digest) {
+            let (pack, offset, length) = self.values.get(digest).unwrap();
             let key = pack.clone() + PACK_EXTENSION;
             let data = self
                 .adapter
@@ -635,15 +411,11 @@ impl DataStorage {
                 .read_object(&key, *offset, *length)?;
             let json = std::str::from_utf8(&data)?;
             let json: Value = serde_json::from_str(json)?;
-            if json.is_object() {
-                Ok(Some(json))
-            } else {
-                bail!("not_an_object")
-            }
+            Ok(json)
         } else if self.stage.contains_key(digest) {
-            Ok(Some(self.stage.get(digest).unwrap().clone()))
+            Ok(self.stage.get(digest).unwrap().clone())
         } else {
-            Ok(None)
+            Err(anyhow!("value_not_found"))
         }
     }
 
@@ -701,7 +473,7 @@ impl DataStorage {
         if s.is_object() {
             let s = s.as_object().unwrap();
             for (digest, v) in s {
-                if !self.objects.contains_key(digest) {
+                if !self.values.contains_key(digest) {
                     self.stage.insert(digest.clone(), v.clone());
                 }
             }
@@ -711,18 +483,18 @@ impl DataStorage {
         }
     }
 
-    pub fn read_raw_object(&self, key: &str, offset: usize, length: usize) -> Result<Vec<u8>> {
+    pub fn read_raw_bytes(&self, key: &str, offset: usize, length: usize) -> Result<Vec<u8>> {
         self.adapter
             .read()
             .unwrap()
             .read_object(key, offset, length)
     }
 
-    pub fn write_raw_object(&mut self, key: &str, data: &[u8]) -> Result<()> {
+    pub fn write_raw_bytes(&mut self, key: &str, data: &[u8]) -> Result<()> {
         self.adapter.write().unwrap().write_object(key, data)
     }
 
-    pub fn list_raw_objects(&self, ext: &str) -> Result<Vec<String>> {
+    pub fn list_raw_items(&self, ext: &str) -> Result<Vec<String>> {
         self.adapter.read().unwrap().list_objects(ext)
     }
 }

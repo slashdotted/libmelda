@@ -19,13 +19,19 @@ use std::collections::HashMap;
 use yavomrs::yavom::{myers_unfilled, Move, Point};
 
 use crate::constants::{
-    EMPTY_HASH, FLATTEN_SUFFIX, HASH_FIELD, ID_FIELD, PATCH_DELETE, PATCH_INSERT, ROOT_ID,
-    STRING_ESCAPE_PREFIX,
+    ARRAY_DESCRIPTOR_PREFIX, EMPTY_HASH,
+    FLATTEN_SUFFIX, HASH_FIELD, ID_FIELD, PATCH_DELETE, PATCH_INSERT, ROOT_ID,
+    STRING_ESCAPE_PREFIX, ARRAY_DESCRIPTOR_ORDER_FIELD,
 };
 
 /// Returns true if the key matches a flattened field
 pub fn is_flattened_field(key: &str) -> bool {
     key.ends_with(FLATTEN_SUFFIX)
+}
+
+/// Returns true if the key represents an array descriptor
+pub fn is_array_descriptor(key: &str) -> bool {
+    key.starts_with(ARRAY_DESCRIPTOR_PREFIX)
 }
 
 /// Escapes a string (add escape prefix)
@@ -85,17 +91,26 @@ pub fn digest_object(o: &Map<String, Value>) -> Result<String> {
 }
 
 /// Returns the identifier of an object with path
-pub fn get_identifier(value: &Map<String, Value>, path: &[String]) -> String {
+pub fn generate_identifier(value: &Map<String, Value>, path: &[String]) -> Result<String> {
     if value.contains_key(ID_FIELD) {
         let v = value.get(ID_FIELD).unwrap();
-        if v.is_string() {
-            return v.as_str().unwrap().to_owned();
+        if let Some(v) = v.as_str() {
+            if !is_array_descriptor(v) {
+                Err(anyhow!("user_object_identifier_cannot_begin_with_array_descriptor_prefix"))
+            } else {
+                Ok(v.to_owned())
+            }
+        } else {
+            Err(anyhow!("invalid_user_object_identifier"))
         }
-    }
-    if path.is_empty() {
-        ROOT_ID.to_string()
+    } else if path.is_empty() {
+        Ok(ROOT_ID.to_string())
     } else {
-        digest_string(&path.join(""))
+        // We assume that the string digest does not start with 
+        // the ARRAY_DESCRIPTOR_PREFIX (which is true, 
+        // since the prefix is the ^ character by default 
+        // and the digest is an hex string)
+        Ok(digest_string(&path.join("")))
     }
 }
 
@@ -152,7 +167,7 @@ pub fn flatten(
         Value::String(s) => Value::from(escape(s)),
         Value::Array(a) => Value::from(a.iter().map(|v| flatten(c, v, path)).collect::<Vec<_>>()),
         Value::Object(o) => {
-            let uuid = get_identifier(o, path);
+            let uuid = generate_identifier(o, path).unwrap();
             let mut fpath = path.to_owned();
             fpath.push(uuid.clone());
             let no: Map<String, Value> = o
@@ -162,7 +177,22 @@ pub fn flatten(
                     if k.ends_with(FLATTEN_SUFFIX) {
                         let mut fpath = fpath.clone();
                         fpath.push(k.clone());
-                        (k.clone(), flatten(c, v, &fpath))
+                        let flattened = flatten(c, v, &fpath);
+                        if let Value::Array(a) = &flattened {
+                            // We assume that all arrays will be stored as deltas from
+                            // the previous version
+                            let mut array_descriptor_object = Map::new();
+                            array_descriptor_object.insert(
+                                ARRAY_DESCRIPTOR_ORDER_FIELD.to_string(),
+                                    flattened,
+                                );
+                            let array_descriptor_uuid = ARRAY_DESCRIPTOR_PREFIX.to_string()
+                                + &digest_string(&fpath.join(""));
+                            c.insert(array_descriptor_uuid.clone(), array_descriptor_object);
+                            (k.clone(), Value::from(array_descriptor_uuid))
+                        } else {
+                            (k.clone(), flattened)
+                        }
                     } else {
                         (k.clone(), v.clone())
                     }
@@ -181,6 +211,36 @@ pub fn unflatten(c: &HashMap<String, Map<String, Value>>, value: &Value) -> Opti
         Value::String(s) => {
             if s.starts_with(STRING_ESCAPE_PREFIX) {
                 Some(Value::from(unescape(s)))
+            } else if s.starts_with(ARRAY_DESCRIPTOR_PREFIX) {
+                // Fetch corresponding descriptor
+                match c.get(s) {
+                    Some(v) => {
+                        if let Some(v) = v.get(ARRAY_DESCRIPTOR_ORDER_FIELD) {
+                            if let Some(order) = v.as_array() {
+                                let mut array : Vec<Value> = vec![];
+                                for uuid in order {
+                                    if let Some(uuid) = uuid.as_str() {
+                                        match c.get(uuid) {
+                                            Some(o) => {
+                                                if let Some(item) = unflatten(c, &Value::from(o.clone())) {
+                                                    array.push(item);
+                                                }
+                                            },
+                                            None => (),
+                                        }
+                                    }
+                                    
+                                }
+                                Some(Value::from(array))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    }
+                    None => None,
+                }
             } else {
                 match c.get(s) {
                     Some(v) => unflatten(c, &Value::from(v.clone())),
@@ -332,17 +392,17 @@ mod tests {
     fn test_get_identifier() {
         let path = vec![];
         assert!(
-            get_identifier(
+            generate_identifier(
                 json!({"_id":"foo","alpha":1234}).as_object_mut().unwrap(),
                 &path
-            ) == "foo"
+            ).unwrap() == "foo"
         );
         let path: Vec<String> = vec!["foo", "bar", "baz"]
             .into_iter()
             .map(|x| x.to_string())
             .collect();
         assert!(
-            get_identifier(json!({"alpha":1234}).as_object_mut().unwrap(), &path)
+            generate_identifier(json!({"alpha":1234}).as_object_mut().unwrap(), &path).unwrap()
                 == digest_string("foobarbaz")
         );
     }

@@ -58,6 +58,10 @@ impl RevisionTree {
         &self.revisions
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.revisions.is_empty()
+    }
+
     /// Returns leafs revisions
     pub fn get_leafs(&self) -> BTreeSet<&Revision> {
         let mut leafs = self.get_all_revs();

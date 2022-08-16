@@ -16,12 +16,11 @@
 use crate::adapter::Adapter;
 use crate::constants::{
     CHANGESETS_FIELD, DELTA_EXTENSION, ID_FIELD, INFORMATION_FIELD, OBJECTS_FIELD, PACK_FIELD,
-    PARENTS_FIELD, ROOT_ID,
-};
+    PARENTS_FIELD, ROOT_ID, ARRAY_DESCRIPTOR_ORDER_FIELD, ARRAY_DESCRIPTOR_DELTA_ORDER_FIELD };
 use crate::datastorage::DataStorage;
 use crate::revision::Revision;
 use crate::revisiontree::RevisionTree;
-use crate::utils::{digest_bytes, digest_object, digest_string, flatten, unflatten};
+use crate::utils::{digest_bytes, digest_object, digest_string, flatten, unflatten, is_array_descriptor, apply_diff_patch, merge_arrays};
 use anyhow::{anyhow, bail, Result};
 use rayon::prelude::*;
 use serde_json::{Map, Value};
@@ -34,10 +33,11 @@ struct Change(String, Revision, Option<Revision>);
 
 /// Melda is a Delta-State CRDT for arbitrary JSON documents.
 pub struct Melda {
-    documents: RwLock<BTreeMap<String, RevisionTree>>,
+    documents: RwLock<BTreeMap<String, RwLock<RevisionTree>>>,
     data: RwLock<DataStorage>,
     stage: RwLock<Vec<Change>>,
     blocks: RwLock<BTreeMap<String, RwLock<Block>>>,
+    // TODO: add ArrayDescriptor cache
 }
 
 #[derive(PartialEq, Copy, Clone, Debug)]
@@ -62,6 +62,77 @@ pub struct Block {
     status: Status,
 }
 
+
+// Array descriptor represents an array descriptor. It is used to support reconstruction of delta descriptors
+struct ArrayDescriptor {
+    patch: Option<Vec<Value>>,
+    order: Option<Vec<Value>>
+}
+
+impl ArrayDescriptor {
+    // Constructs a new array descriptor by parsing the provided JSON object
+    pub fn new_from_object(object : Map<String,Value>) -> Result<ArrayDescriptor> {
+        if let Some(field) = object.get(ARRAY_DESCRIPTOR_ORDER_FIELD) {
+            if let Some(array) = field.as_array() {
+                Ok(ArrayDescriptor {
+                    patch: None,
+                    order: Some(array.clone()),
+                })
+            } else {
+                Err(anyhow!("order_field_is_not_an_array"))
+            }
+        } else if let Some(field) = object.get(ARRAY_DESCRIPTOR_DELTA_ORDER_FIELD) {
+            if let Some(array) = field.as_array() {
+                Ok(ArrayDescriptor {
+                    patch: Some(array.clone()),
+                    order: None,
+                })
+            } else {
+                Err(anyhow!("delta_order_field_is_not_an_array"))
+            }
+        } else {
+            Err(anyhow!("malformed_array_descriptor"))
+        }
+    }
+
+    pub fn new_from_order(order : Vec<Value>) -> ArrayDescriptor {
+        ArrayDescriptor {
+            patch: None,
+            order: Some(order)
+        }
+    }
+
+    pub fn to_json_object(&self) -> Map<String,Value> {
+        let mut o = Map::<String,Value>::new();
+        if self.is_diff() {
+            o.insert(ARRAY_DESCRIPTOR_DELTA_ORDER_FIELD.to_string(), Value::from(self.patch.clone().unwrap()));
+        } else {
+            o.insert(ARRAY_DESCRIPTOR_ORDER_FIELD.to_string(), Value::from(self.order.clone().unwrap()));
+        };
+        o
+    }
+
+    pub fn is_diff(&self) -> bool {
+        self.patch.is_some()
+    }
+
+    pub fn get_patch(&self) -> &Option<Vec<Value>> {
+        &self.patch
+    }
+
+    pub fn get_order(&self) -> &Option<Vec<Value>> {
+        &self.order
+    }
+}
+
+
+// melda.rs
+// Determine leaf revisions 
+// For each leaf determine revision history
+// Call datastorage to rebuild full descriptor
+// Merge 
+// 
+
 impl Melda {
     /// Initializes a new Melda data structure using the provided adapter
     ///
@@ -79,7 +150,7 @@ impl Melda {
     /// ```
     pub fn new(adapter: Arc<RwLock<Box<dyn Adapter>>>) -> Result<Melda> {
         let mut dc = Melda {
-            documents: RwLock::new(BTreeMap::<String, RevisionTree>::new()),
+            documents: RwLock::new(BTreeMap::<String, RwLock<RevisionTree>>::new()),
             data: RwLock::new(DataStorage::new(adapter.clone())),
             stage: RwLock::new(Vec::<Change>::new()),
             blocks: RwLock::new(BTreeMap::new()),
@@ -104,7 +175,7 @@ impl Melda {
     pub fn new_from_url(url: &str) -> Result<Melda> {
         let adapter = Arc::new(RwLock::new(crate::adapter::get_adapter(url).unwrap()));
         let mut dc = Melda {
-            documents: RwLock::new(BTreeMap::<String, RevisionTree>::new()),
+            documents: RwLock::new(BTreeMap::<String, RwLock<RevisionTree>>::new()),
             data: RwLock::new(DataStorage::new(adapter.clone())),
             stage: RwLock::new(Vec::<Change>::new()),
             blocks: RwLock::new(BTreeMap::new()),
@@ -149,7 +220,7 @@ impl Melda {
     /// ```
     pub fn new_until(adapter: Arc<RwLock<Box<dyn Adapter>>>, block: &str) -> Result<Melda> {
         let mut dc = Melda {
-            documents: RwLock::new(BTreeMap::<String, RevisionTree>::new()),
+            documents: RwLock::new(BTreeMap::<String, RwLock<RevisionTree>>::new()),
             data: RwLock::new(DataStorage::new(adapter.clone())),
             stage: RwLock::new(Vec::<Change>::new()),
             blocks: RwLock::new(BTreeMap::new()),
@@ -169,7 +240,7 @@ impl Melda {
     pub fn new_from_url_until(url: &str, block: &str) -> Result<Melda> {
         let adapter = Arc::new(RwLock::new(crate::adapter::get_adapter(url).unwrap()));
         let mut dc = Melda {
-            documents: RwLock::new(BTreeMap::<String, RevisionTree>::new()),
+            documents: RwLock::new(BTreeMap::<String, RwLock<RevisionTree>>::new()),
             data: RwLock::new(DataStorage::new(adapter.clone())),
             stage: RwLock::new(Vec::<Change>::new()),
             blocks: RwLock::new(BTreeMap::new()),
@@ -196,24 +267,20 @@ impl Melda {
     /// assert!(replica.create_object("myobject", object).is_ok())
     /// ```
     pub fn create_object(&mut self, uuid: &str, obj: Map<String, Value>) -> Result<()> {
-        let mut rt = RevisionTree::new();
-        let rev = Revision::new(1u32, digest_object(&obj)?, None);
-        let mut data = self.data.write().expect("cannot_acquire_data_for_writing");
-        data.write_object(&rev, obj, None)?;
-        rt.add(rev.clone(), None);
-        if self
-            .documents
-            .write()
-            .expect("cannot_acquire_documents_for_writing")
-            .insert(uuid.to_string(), rt)
-            .is_some()
-        {
-            bail!("duplicate_revision_tree");
-        }
+        // Create initial revision
+        let rev = Revision::new(1u32, digest_object(&obj).expect("cannot_create_revision"), None);
+        let mut data_w = self.data.write().expect("cannot_acquire_data_for_writing");
+        data_w.write_object(&rev, obj.clone()).expect("cannot_write_object");
+        drop(data_w);
+        // Obtain the revision tree (either an existing one of a new one)
+        let mut docs_w = self.documents.write().expect("cannot_acquire_documents_for_writing");
+        let mut rt_w = docs_w.entry(uuid.to_string()).or_insert(RwLock::new(RevisionTree::new())).write().expect("cannot_acquire_revision_tree_for_writing");
+        drop(docs_w);
+        rt_w.add(rev.clone(), None);
         self.stage
             .write()
             .expect("cannot_acquire_stage_for_writing")
-            .push(Change(uuid.to_string(), rev, None));
+            .push(Change(uuid.to_owned(), rev, None));
         Ok(())
     }
 
@@ -237,75 +304,59 @@ impl Melda {
     /// assert!(replica.update_object("myobject", object).is_ok());
     /// ```
     pub fn update_object(&mut self, uuid: &str, obj: Map<String, Value>) -> Result<()> {
-        let docs_r = self
-            .documents
-            .read()
-            .expect("cannot_acquire_documents_for_reading");
-        match docs_r.get(uuid) {
-            Some(rt) => {
-                let digest = digest_object(&obj)?; // Digest of the "full" object
-                let w = rt.get_winner().unwrap().clone(); // Winning revision
-                if w.is_deleted() {
-                    bail!("cannot_update_deleted_revision");
-                } else if w.is_resolved() {
-                    bail!("cannot_update_resolved_revision");
-                }
-                if digest.ne(&w.digest) {
-                    // The w.digest corresponds to the "full" object
-                    let data_r = self.data.read().expect("cannot_acquire_data_for_reading");
-                    match data_r.delta_object(obj.clone(), rt)? {
-                        Some(delta) => {
-                            // The delta was created
-                            let delta_digest = digest_object(&delta)?;
-                            let rev = Revision::new_with_delta(
-                                w.index + 1,
-                                digest,
-                                delta_digest,
-                                Some(&w),
-                            );
-                            drop(docs_r);
-                            drop(data_r);
-                            self.documents
-                                .write()
-                                .unwrap()
-                                .get_mut(uuid)
-                                .unwrap()
-                                .add(rev.clone(), Some(w.clone()));
-                            let mut data_w =
-                                self.data.write().expect("cannot_acquire_data_for_writing");
-                            data_w.write_object(&rev, obj, Some(delta))?;
-                            self.stage
-                                .write()
-                                .expect("cannot_acquire_stage_for_writing")
-                                .push(Change(uuid.to_string(), rev, Some(w)));
-                        }
-                        None => {
-                            // There were no delta fields or the object should not be "delta-ed"
-                            let rev = Revision::new(w.index + 1, digest, Some(&w));
-                            drop(docs_r);
-                            let mut docs_w = self
-                                .documents
-                                .write()
-                                .expect("cannot_acquire_documents_for_writing");
-                            let rt = docs_w.get_mut(uuid).unwrap();
-                            rt.add(rev.clone(), Some(w.clone()));
-                            drop(data_r);
-                            let mut data_w =
-                                self.data.write().expect("cannot_acquire_data_for_writing");
-                            data_w.write_object(&rev, obj, None)?;
-                            self.stage
-                                .write()
-                                .expect("cannot_acquire_stage_for_writing")
-                                .push(Change(uuid.to_string(), rev, Some(w)));
-                        }
-                    }
-                }
-                Ok(())
+         // Obtain the revision tree (either an existing one of a new one)
+         let mut docs_w = self.documents.write().expect("cannot_acquire_documents_for_writing");
+         let mut rt_w = docs_w.entry(uuid.to_string()).or_insert(RwLock::new(RevisionTree::new())).write().expect("cannot_acquire_revision_tree_for_writing");
+         drop(docs_w);
+         // Check whether there is a winning revision
+         if let Some(winning_revision) = rt_w.get_winner() {   
+             // If its an array descriptor first need to compute the delta
+             // If create_delta_array_descriptor returns None it means that there are
+             // no differences between the current array and the new one
+             let object = if is_array_descriptor(uuid) {
+                 let delta = self.create_delta_array_descriptor(&obj, &rt_w).unwrap();
+                 delta
+             } else {
+                 Some(obj.clone())
+             };
+             // Now compute the digest to see if the object has changed
+             // An object can be None if its an "empty" delta array descriptor
+             if let Some(object) = object {
+                 let digest = digest_object(&obj).unwrap(); // Digest of the current object
+                 if digest.ne(&winning_revision.digest) {
+                     // Digest is different, there was an update
+                     let rev = Revision::new(1u32, digest, Some(&winning_revision));
+                     rt_w.add(rev.clone(), Some(winning_revision.clone()));
+                     let mut data_w = self.data.write().expect("cannot_acquire_data_for_writing");
+                     data_w.write_object(&rev, object).unwrap();
+                     drop(data_w);
+                     self.stage
+                         .write()
+                         .unwrap()
+                         .push(Change(uuid.to_string(), rev, Some(winning_revision.clone())));
+                 }
+             }
+             drop(rt_w);
+             Ok(())
+         } else {
+             // No winning revision, assume that its a new object
+            self.create_object(uuid, obj)
+         }
+     }
+
+     pub fn read_object(&self, uuid: &str) -> Result<Map<String, Value>> {
+        let docs_r = self.documents.read().expect("cannot_acquire_documents_for_reading");
+        if let Some(rt) = docs_r.get(uuid) {
+            let rt_r = rt.read().expect("cannot_acquire_revision_tree_for_reading");
+            let winner = rt_r.get_winner().expect("object_has_no_winner");
+            if is_array_descriptor(uuid) {
+                let order = self.get_merged_order(&rt_r).expect("cannot_get_merged_order");
+                Ok(ArrayDescriptor::new_from_order(order).to_json_object())
+            } else {
+                Ok(self.data.read().expect("cannot_acquire_data_for_reading").read_object(&winner).expect("cannot_read_object"))
             }
-            None => {
-                drop(docs_r);
-                self.create_object(uuid, obj)
-            }
+        } else {
+            Err(anyhow!("invalid object uuid"))
         }
     }
 
@@ -333,20 +384,23 @@ impl Melda {
     /// assert!(value.unwrap().contains_key("_deleted"));
     /// ```
     pub fn delete_object(&mut self, uuid: &str) -> Result<()> {
-        match self.documents.write().unwrap().get_mut(uuid) {
+        match self.documents.read().expect("cannot_acquire_documents_for_reading").get_mut(uuid) {
             Some(rt) => {
-                let w = rt.get_winner().unwrap().clone();
-                if !w.is_deleted() && !w.is_resolved() {
-                    let rev = Revision::new_deleted(&w);
-                    rt.add(rev.clone(), Some(w.clone()));
-                    self.stage
-                        .write()
-                        .unwrap()
-                        .push(Change(uuid.to_string(), rev, Some(w)));
+                let rt_w = rt.write().expect("cannot_acquire_revision_tree_for_writing");
+                if let Some(winning_revision) = rt_w.get_winner() {
+                    if !winning_revision.is_deleted() && !winning_revision.is_resolved() {
+                        let rev = Revision::new_deleted(winning_revision);
+                        rt_w.add(rev.clone(), Some(winning_revision.clone()));
+                        self.stage
+                            .write()
+                            .unwrap()
+                            .push(Change(uuid.to_string(), rev, Some(winning_revision.clone())));
+                    }
                 }
+
                 Ok(())
             }
-            None => Err(anyhow!("object_not_found")),
+            None => Err(anyhow!("cannot_delete_non_existing_object")),
         }
     }
 
@@ -384,7 +438,7 @@ impl Melda {
         }
         drop(stage);
         let mut block = Map::<String, Value>::new();
-        let mut data = self.data.write().unwrap();
+        let mut data = self.data.write().expect("cannot_acquire_data_for_writing");
         let _packid = data.pack()?;
         // Process stage
         let mut changes = Vec::<Value>::new();
@@ -395,22 +449,12 @@ impl Melda {
                 changes.push(Value::from(tuple));
             } else {
                 // Update record
-                if rev.is_delta() {
-                    let quad = vec![
-                        uuid.clone(),
-                        prev.as_ref().unwrap().to_string(),
-                        rev.digest.clone(),
-                        rev.delta_digest.as_ref().unwrap().clone(),
-                    ];
-                    changes.push(Value::from(quad));
-                } else {
-                    let triple = vec![
+                let triple = vec![
                         uuid.clone(),
                         prev.as_ref().unwrap().to_string(),
                         rev.digest.clone(),
                     ];
                     changes.push(Value::from(triple));
-                }
             }
         }
         block.insert(CHANGESETS_FIELD.to_string(), Value::from(changes));
@@ -433,7 +477,7 @@ impl Melda {
         let blockstr = serde_json::to_string(&block).unwrap();
         let block_hash = digest_string(&blockstr);
         let blockid = block_hash.clone() + DELTA_EXTENSION;
-        data.write_raw_object(&blockid, blockstr.as_bytes())?;
+        data.write_raw_bytes(&blockid, blockstr.as_bytes())?;
         // Clears the stage
         self.stage.write().unwrap().clear();
         // Load the block
@@ -495,8 +539,11 @@ impl Melda {
     /// ```
     pub fn get_value(&self, uuid: &str, revision: &str) -> Result<Map<String, Value>> {
         let revision = Revision::from(revision).expect("invalid_revision_string");
-        match self.documents.read().unwrap().get(uuid) {
-            Some(o) => self.data.read().unwrap().read_object(&revision, o),
+        match self.documents.read().expect("failed_to_acquire_documents_for_reading").get(uuid) {
+            Some(rt) => {
+                let rt_r = rt.read().expect("cannot_acquire_revision_tree_for_reading");
+                self.data.read().expect("cannot_acquire_data_for_reading").read_object(&revision)
+            },
             None => Err(anyhow!("invalid object uuid")),
         }
     }
@@ -570,14 +617,14 @@ impl Melda {
             bail!("stage_not_empty")
         }
         // Clear the documents
-        self.documents.write().unwrap().clear();
+        self.documents.write().expect("failed_to_acquire_documents_for_writing").clear();
         // Read block list
-        let data = self.data.read().unwrap();
-        let list_str = data.list_raw_objects(DELTA_EXTENSION)?;
+        let data = self.data.read().expect("cannot_acquire_data_for_reading");
+        let list_str = data.list_raw_items(DELTA_EXTENSION)?;
         drop(data);
         self.blocks.write().unwrap().clear();
         // Reload data storage
-        let mut data = self.data.write().unwrap();
+        let mut data = self.data.write().expect("cannot_acquire_data_for_writing");
         data.reload()?;
         drop(data);
         // Clear the blocks
@@ -643,8 +690,8 @@ impl Melda {
         // 2. Unstage
         self.unstage()?;
         // 3. Get new list of blocks
-        let data_r = self.data.write().expect("cannot_acquire_data_for_writing");
-        let list_str = data_r.list_raw_objects(DELTA_EXTENSION)?;
+        let data_r = self.data.read().expect("cannot_acquire_data_for_writing");
+        let list_str = data_r.list_raw_items(DELTA_EXTENSION)?;
         drop(data_r);
         // 4. Refresh data storage
         let mut data_w = self.data.write().expect("cannot_acquire_data_for_writing");
@@ -763,7 +810,7 @@ impl Melda {
         drop(documents_w);
         // Read block list
         let data_r = self.data.write().expect("cannot_acquire_data_for_writing");
-        let list_str = data_r.list_raw_objects(DELTA_EXTENSION)?;
+        let list_str = data_r.list_raw_items(DELTA_EXTENSION)?;
         drop(data_r);
         // Reload data storage
         let mut data_w = self.data.write().expect("cannot_acquire_data_for_writing");
@@ -857,13 +904,17 @@ impl Melda {
     /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
     /// ```
     pub fn unstage(&mut self) -> Result<()> {
-        self.data.write().unwrap().unstage()?;
+        self.data.write().expect("cannot_acquire_data_for_writing").unstage()?;
         let mut stage = self.stage.write().unwrap();
-        let mut documents = self.documents.write().unwrap();
+        let mut docs_w = self.documents.write().expect("failed_to_acquire_documents_for_writing");
         stage.iter().for_each(|Change(uuid, rev, prev)| {
-            if documents.contains_key(uuid) {
-                let rt = documents.get_mut(uuid).unwrap();
-                rt.remove(rev.clone(), prev.clone());
+            if let Some(rt) = docs_w.get(uuid) {
+                let mut rt_w = rt.write().expect("cannot_acquire_revision_tree_for_writing");
+                rt_w.remove(rev.clone(), prev.clone());
+                if rt_w.is_empty() {
+                    drop(rt_w);
+                    docs_w.remove(uuid);
+                }
             }
         });
         stage.clear();
@@ -900,15 +951,15 @@ impl Melda {
     /// assert!(replica2.get_block(&block_id).unwrap().is_none());
     pub fn merge(&mut self, other: &Melda) -> Result<()> {
         for (uuid, rt) in other.documents.read().unwrap().iter() {
-            if !self.documents.read().unwrap().contains_key(uuid) {
-                let rt = RevisionTree::new();
-                self.documents.write().unwrap().insert(uuid.clone(), rt);
-            }
-            let mut docs = self.documents.write().unwrap();
-            let trt = docs.get_mut(uuid).unwrap();
-            trt.merge(rt);
+            let rt_r = rt.read().expect("failed_to_acquire_revision_tree_for_reading");
+            let docs_w = self.documents.write().expect("cannot_acquire_documents_for_writing");
+            let mut rt_w = docs_w.get(uuid).get_or_insert(&RwLock::new(RevisionTree::new())).write().expect("cannot_acquire_revision_tree_for_writing");
+            drop(docs_w);
+            rt_w.merge(&rt_r);
+            drop(rt_r);
+            drop(rt_w);
         }
-        let mut data = self.data.write().unwrap();
+        let mut data = self.data.write().expect("cannot_acquire_data_for_writing");
         let otherdata = &other.data.read().unwrap();
         data.merge(otherdata)
     }
@@ -946,14 +997,14 @@ impl Melda {
     pub fn meld(&mut self, other: &Melda) -> Result<Vec<String>> {
         let mut result = vec![];
         let other_data = other.data.read().unwrap();
-        let other_items = other_data.list_raw_objects("")?;
+        let other_items = other_data.list_raw_items("")?;
         if !other_items.is_empty() {
-            let mut data = self.data.write().unwrap();
-            let this_items = data.list_raw_objects("")?;
+            let mut data = self.data.write().expect("cannot_acquire_data_for_writing");
+            let this_items = data.list_raw_items("")?;
             let this_items: HashSet<String> = this_items.into_iter().collect();
             for i in &other_items {
                 if !this_items.contains(i) {
-                    data.write_raw_object(i, other_data.read_raw_object(i, 0, 0)?.as_slice())?;
+                    data.write_raw_bytes(i, other_data.read_raw_bytes(i, 0, 0)?.as_slice())?;
                     result.push(i.clone());
                 }
             }
@@ -1003,33 +1054,22 @@ impl Melda {
             .write()
             .expect("cannot_get_data_for_writing")
             .replicate(&other_data)?;
-        for (d, other_rt) in other_documents.iter() {
+        for (uuid, other_rt) in other_documents.iter() {
+            let other_rt_r = other_rt.read().expect("failed_to_acquire_revision_tree_for_reading");
             let mut docs_w = self
                 .documents
                 .write()
                 .expect("cannot_get_documents_for_writing");
-            if !docs_w.contains_key(d) {
-                let mut rt = RevisionTree::new();
-                for (rev, prev) in other_rt.get_revisions() {
-                    if rt.add(rev.clone(), prev.clone()) {
+                let rt_w = docs_w.get(uuid).get_or_insert(&RwLock::new(RevisionTree::new())).write().expect("cannot_acquire_revision_tree_for_writing");
+                drop(docs_w);
+                for (rev, prev) in other_rt_r.get_revisions() {
+                    if rt_w.add(rev.clone(), prev.clone()) {
                         self.stage
                             .write()
                             .expect("cannot_get_stage_for_writing")
-                            .push(Change(d.clone(), rev.clone(), prev.clone()));
+                            .push(Change(uuid.clone(), rev.clone(), prev.clone()));
                     }
                 }
-                docs_w.insert(d.clone(), rt);
-            } else {
-                let rt = docs_w.get_mut(d).unwrap();
-                for (rev, prev) in other_rt.get_revisions() {
-                    if rt.add(rev.clone(), prev.clone()) {
-                        self.stage
-                            .write()
-                            .expect("cannot_get_stage_for_writing")
-                            .push(Change(d.clone(), rev.clone(), prev.clone()));
-                    }
-                }
-            };
         }
         Ok(())
     }
@@ -1049,16 +1089,17 @@ impl Melda {
     /// let readback = replica.read().unwrap();
     /// assert!(readback.contains_key("somekey"));
     pub fn read(&self) -> Result<Map<String, Value>> {
-        if !self.documents.read().unwrap().contains_key(ROOT_ID) {
+        if !self.documents.read().expect("failed_to_acquire_documents_for_reading").contains_key(ROOT_ID) {
             bail!("no_root")
         } else {
             let c = Mutex::new(HashMap::<String, Map<String, Value>>::new());
-            let docs_r = self.documents.read().unwrap();
+            let docs_r = self.documents.read().expect("failed_to_acquire_documents_for_reading");
             docs_r.par_iter().for_each(|(uuid, rt)| {
-                let base_revision = rt.get_winner().ok_or_else(|| anyhow!("no_winner")).unwrap();
+                let rt_r = rt.read().expect("failed_to_acquire_revision_tree_for_reading");
+                let base_revision = rt_r.get_winner().ok_or_else(|| anyhow!("no_winner")).unwrap();
                 if !base_revision.is_deleted() {
-                    let data = self.data.read().unwrap();
-                    let mut obj = data.read_object(base_revision, rt).unwrap();
+                    let data = self.data.read().expect("cannot_acquire_data_for_reading");
+                    let mut obj = data.read_object(base_revision).unwrap();
                     obj.insert(ID_FIELD.to_string(), Value::from(uuid.clone()));
                     let mut c_w = c.lock().unwrap();
                     c_w.insert(uuid.clone(), obj);
@@ -1097,97 +1138,28 @@ impl Melda {
     /// let readback = replica.read().unwrap();
     /// assert!(readback.contains_key("somekey"));
     pub fn update(&mut self, obj: Map<String, Value>) -> Result<()> {
-        let mut c = HashMap::<String, Map<String, Value>>::new();
+        let mut extracted_objects = HashMap::<String, Map<String, Value>>::new();
         let path = Vec::<String>::new();
         let root = Value::from(obj);
-        let root = flatten(&mut c, &root, &path);
+        // Flatten the structure
+        let root = flatten(&mut extracted_objects, &root, &path);
         let root = root.as_str().expect("root_identifier_not_a_string");
         if root != ROOT_ID {
             bail!("invalid_root_id");
         }
-        // Check for objects that have disappeared
-        let mut docs_w = self.documents.write().unwrap();
-        docs_w
-            .par_iter_mut()
-            .filter(|(uuid, _)| !c.contains_key(*uuid))
-            .for_each(|(uuid, rt)| {
-                let w = rt.get_winner().unwrap().clone();
-                if !w.is_deleted() && !w.is_resolved() {
-                    let rev = Revision::new_deleted(&w);
-                    rt.add(rev.clone(), Some(w.clone()));
-                    self.stage
-                        .write()
-                        .unwrap()
-                        .push(Change(uuid.clone(), rev, Some(w)));
-                }
+        // Check for objects that have disappeared 
+        // i.e. objects that are found in the current state but are not within the extracted objects
+        let mut docs_r = self.documents.write().expect("failed_to_acquire_documents_for_writing");
+        docs_r
+            .par_iter()
+            .filter(|(uuid, _)| !extracted_objects.contains_key(*uuid))
+            .for_each(|(uuid, _)| {
+                self.delete_object(uuid);
             });
-        drop(docs_w);
-        // Process updates
-        c.par_iter().for_each(move |(uuid, obj)| {
-            let docs_r = self.documents.read().unwrap();
-            let has_rt = docs_r.contains_key(uuid);
-            drop(docs_r);
-            if has_rt {
-                let docs_r = self.documents.read().unwrap();
-                let w = docs_r.get(uuid).unwrap().get_winner().unwrap().clone(); // Winning revision
-                drop(docs_r);
-                let digest = digest_object(obj).unwrap(); // Digest of the "full" object
-                if digest.ne(&w.digest) {
-                    // The w.digest corresponds to the "full" object
-                    let docs_r = self.documents.read().unwrap();
-                    let rt = docs_r.get(uuid).unwrap().clone();
-                    drop(docs_r);
-                    let data_r = self.data.read().unwrap();
-                    let delta = data_r.delta_object(obj.clone(), &rt).unwrap();
-                    drop(data_r);
-                    if let Some(delta) = delta {
-                        // The delta was created
-                        let delta_digest = digest_object(&delta).unwrap();
-                        let rev =
-                            Revision::new_with_delta(w.index + 1, digest, delta_digest, Some(&w));
-                        let mut docs_w = self.documents.write().unwrap();
-                        let rt = docs_w.get_mut(uuid).unwrap();
-                        rt.add(rev.clone(), Some(w.clone()));
-                        drop(docs_w);
-                        let mut data_w = self.data.write().unwrap();
-                        data_w.write_object(&rev, obj.clone(), Some(delta)).unwrap();
-                        drop(data_w);
-                        self.stage
-                            .write()
-                            .unwrap()
-                            .push(Change(uuid.clone(), rev, Some(w)));
-                    } else {
-                        // There were no delta fields or the object should not be "delta-ed"
-                        let rev = Revision::new(w.index + 1, digest, Some(&w));
-                        let mut docs_w = self.documents.write().unwrap();
-                        let rt = docs_w.get_mut(uuid).unwrap();
-                        rt.add(rev.clone(), Some(w.clone()));
-                        drop(docs_w);
-                        let mut data = self.data.write().unwrap();
-                        data.write_object(&rev, obj.clone(), None).unwrap();
-                        self.stage
-                            .write()
-                            .unwrap()
-                            .push(Change(uuid.clone(), rev, Some(w)));
-                    }
-                }
-            } else {
-                let mut rt = RevisionTree::new();
-                let rev = Revision::new(1u32, digest_object(obj).unwrap(), None);
-                let mut data_w = self.data.write().unwrap();
-                data_w.write_object(&rev, obj.clone(), None).unwrap();
-                drop(data_w);
-                rt.add(rev.clone(), None);
-                let mut docs_w = self.documents.write().unwrap();
-                if docs_w.insert(uuid.clone(), rt).is_some() {
-                    panic!("duplicate_revision_tree");
-                }
-                drop(docs_w);
-                self.stage
-                    .write()
-                    .unwrap()
-                    .push(Change(uuid.clone(), rev, None));
-            }
+        drop(docs_r);
+        // Check for newly created and updated objects
+        extracted_objects.par_iter().for_each(move |(uuid, obj)| {
+            self.update_object(uuid, obj.clone());
         });
         Ok(())
     }
@@ -1219,10 +1191,12 @@ impl Melda {
     /// assert!(conflicting.contains("myobject"));
     pub fn in_conflict(&self) -> BTreeSet<String> {
         let mut result = BTreeSet::new();
-        self.documents.read().unwrap().iter().for_each(|(d, rt)| {
-            let l = rt.get_leafs();
+        // TODO: Make parallel
+        self.documents.read().expect("failed_to_acquire_documents_for_reading").iter().for_each(|(uuid, rt)| {
+            let rt_r = rt.read().expect("failed_to_acquire_revision_tree_for_reading");
+            let l = rt_r.get_leafs();
             if l.len() > 1 {
-                result.insert(d.clone());
+                result.insert(uuid.clone());
             }
         });
         result
@@ -1263,10 +1237,13 @@ impl Melda {
     where
         T: AsRef<str>,
     {
-        match self.documents.read().unwrap().get(uuid.as_ref()) {
-            Some(rt) => match rt.get_winner() {
+        match self.documents.read().expect("cannot_acquire_documents_for_reading").get(uuid.as_ref()) {
+            Some(rt) => {
+                let rt_r = rt.read().expect("cannot_acquire_revision_tree_for_reading");
+                match rt_r.get_winner() {
                 Some(r) => Ok(r.to_string()),
                 None => Err(anyhow!("no_winner")),
+                }
             },
             None => Err(anyhow!("unknown_document")),
         }
@@ -1308,10 +1285,11 @@ impl Melda {
     where
         T: AsRef<str>,
     {
-        match self.documents.read().unwrap().get(uuid.as_ref()) {
+        match self.documents.read().expect("failed_to_acquire_documents_for_reading").get(uuid.as_ref()) {
             Some(rt) => {
-                let w = rt.get_winner().ok_or_else(|| anyhow!("no_winner"))?;
-                let l = rt.get_leafs();
+                let rt_r = rt.read().expect("failed_to_acquire_revision_tree_for_reading");
+                let w = rt_r.get_winner().ok_or_else(|| anyhow!("no_winner"))?;
+                let l = rt_r.get_leafs();
                 Ok(l.iter()
                     .filter(|r| w.ne(r))
                     .map(|r| r.to_string())
@@ -1361,11 +1339,12 @@ impl Melda {
     pub fn resolve_as(&mut self, uuid: &str, winner: &str) -> Result<String> {
         {
             let winner = Revision::from(winner).expect("invalid_revision_string");
-            let docs_r = self.documents.read().unwrap();
+            let docs_r = self.documents.read().expect("failed_to_acquire_documents_for_reading");
             let rt = docs_r
                 .get(uuid)
                 .ok_or_else(|| anyhow!("unknown_document"))?;
-            let leafs = rt.get_leafs();
+            let rt_r = rt.read().expect("failed_to_acquire_revision_tree_for_reading");
+            let leafs = rt_r.get_leafs();
             // We can only resolve to a status revision
             if !leafs.contains(&winner) {
                 bail!("invalid_winner_revision");
@@ -1375,32 +1354,38 @@ impl Melda {
                 bail!("not_in_conflict");
             }
             // Update the winner to ensure that we do not change the view
-            let data_r = self.data.read().unwrap();
-            let merged = data_r.read_object(&winner, rt)?;
+            let data_r = self.data.read().expect("cannot_acquire_data_for_reading");
+            let merged = data_r.read_object(&winner)?;
+            drop(rt_r);
             drop(data_r);
             drop(leafs);
             drop(docs_r);
             self.update_object(uuid, merged)?;
         }
-        let docs_r = self.documents.read().unwrap();
+        let docs_r = self.documents.read().expect("failed_to_acquire_documents_for_reading");
         let rt = docs_r
             .get(uuid)
             .ok_or_else(|| anyhow!("unknown_document"))?;
-        let winner = rt
+            let rt_r = rt.read().expect("failed_to_acquire_revision_tree_for_reading");
+        let winner = rt_r
             .get_winner()
             .expect("revision_tree_invalid_state")
             .clone();
+            drop(rt_r);
         drop(docs_r);
         // Seal all other revisions as resolved
-        let mut docs_w = self.documents.write().unwrap();
+        let mut docs_w = self.documents.write().expect("failed_to_acquire_documents_for_writing");
         let rt = docs_w
             .get_mut(uuid)
             .ok_or_else(|| anyhow!("unknown_document"))?;
-        let leafs: Vec<Revision> = rt.get_leafs().iter().map(|r| (*r).clone()).collect();
+            let rt_r = rt.read().expect("failed_to_acquire_revision_tree_for_reading");            
+        let leafs: Vec<Revision> = rt_r.get_leafs().iter().map(|r| (*r).clone()).collect();
+        drop(rt_r);
         for r in leafs {
             if r != winner {
                 let resolved = Revision::new_resolved(&r);
-                if rt.add(resolved.clone(), Some(r.clone())) {
+                let rt_w = rt.write().expect("failed_to_acquire_revision_tree_for_writing");
+                if rt_w.add(resolved.clone(), Some(r.clone())) {
                     self.stage.write().unwrap().push(Change(
                         uuid.to_string(),
                         resolved,
@@ -1445,7 +1430,7 @@ impl Melda {
     /// ```
     pub fn stage(&self) -> Result<Option<Value>> {
         let mut r = Map::<String, Value>::new();
-        let data = self.data.read().unwrap();
+        let data = self.data.read().expect("cannot_acquire_data_for_reading");
         let data_stage = data.stage()?;
         r.insert(OBJECTS_FIELD.to_string(), data_stage);
         let rur = self.stage.read().unwrap();
@@ -1458,22 +1443,13 @@ impl Melda {
                     changes.push(Value::from(tuple));
                 } else {
                     // Update record
-                    if rev.is_delta() {
-                        let quad = vec![
-                            uuid.clone(),
-                            prev.as_ref().unwrap().to_string(),
-                            rev.digest.clone(),
-                            rev.delta_digest.as_ref().unwrap().clone(),
-                        ];
-                        changes.push(Value::from(quad));
-                    } else {
-                        let triple = vec![
-                            uuid.clone(),
-                            prev.as_ref().unwrap().to_string(),
-                            rev.digest.clone(),
-                        ];
-                        changes.push(Value::from(triple));
-                    }
+                    let triple = vec![
+                        uuid.clone(),
+                        prev.as_ref().unwrap().to_string(),
+                        rev.digest.clone(),
+                    ];
+                    changes.push(Value::from(triple));
+                
                 }
             }
             r.insert(CHANGESETS_FIELD.to_string(), Value::from(changes));
@@ -1524,7 +1500,7 @@ impl Melda {
                 let s = s.as_object().unwrap();
                 if s.contains_key(OBJECTS_FIELD) {
                     let o = s.get(OBJECTS_FIELD).unwrap();
-                    let mut data = self.data.write().unwrap();
+                    let mut data = self.data.write().expect("cannot_acquire_data_for_writing");
                     data.replay_stage(o)?;
                 }
                 if s.contains_key(CHANGESETS_FIELD) {
@@ -1542,7 +1518,7 @@ impl Melda {
                                             .as_str()
                                             .ok_or_else(|| anyhow!("expecting_digest_string"))?;
                                         let r = Revision::new(1, digest.to_string(), None);
-                                        if !self.documents.read().unwrap().contains_key(uuid) {
+                                        if !self.documents.read().expect("failed_to_acquire_documents_for_reading").contains_key(uuid) {
                                             let mut rt = RevisionTree::new();
                                             if rt.add(r.clone(), None) {
                                                 self.stage.write().unwrap().push(Change(
@@ -1554,11 +1530,12 @@ impl Melda {
                                             self.documents
                                                 .write()
                                                 .unwrap()
-                                                .insert(uuid.to_string(), rt);
+                                                .insert(uuid.to_string(), RwLock::new(rt));
                                         } else {
-                                            let mut docs = self.documents.write().unwrap();
+                                            let mut docs = self.documents.write().expect("failed_to_acquire_documents_for_writing");
                                             let rt = docs.get_mut(uuid).unwrap();
-                                            if rt.add(r.clone(), None) {
+                                            let rt_w = rt.write().expect("failed_to_acquire_revision_tree_for_writing");
+                                            if rt_w.add(r.clone(), None) {
                                                 self.stage.write().unwrap().push(Change(
                                                     uuid.to_string(),
                                                     r,
@@ -1582,7 +1559,7 @@ impl Melda {
                                             digest.to_string(),
                                             Some(&prev),
                                         );
-                                        if !self.documents.read().unwrap().contains_key(uuid) {
+                                        if !self.documents.read().expect("failed_to_acquire_documents_for_reading").contains_key(uuid) {
                                             // FIXME: Should this be allowed?
                                             // This might happen if we save the stage, then reload to a previous block
                                             // were an object did not yet exist and then try to re-apply the stage
@@ -1596,57 +1573,12 @@ impl Melda {
                                             self.documents
                                                 .write()
                                                 .unwrap()
-                                                .insert(uuid.to_string(), rt);
+                                                .insert(uuid.to_string(), RwLock::new(rt));
                                         } else {
-                                            let mut docs = self.documents.write().unwrap();
+                                            let mut docs = self.documents.write().expect("failed_to_acquire_documents_for_writing");
                                             let rt = docs.get_mut(uuid).unwrap();
-                                            if rt.add(r.clone(), Some(prev.clone())) {
-                                                self.stage.write().unwrap().push(Change(
-                                                    uuid.to_string(),
-                                                    r,
-                                                    Some(prev),
-                                                ));
-                                            }
-                                        }
-                                    } else if record.len() == 4 {
-                                        let uuid = record[0]
-                                            .as_str()
-                                            .ok_or_else(|| anyhow!("expecting_uuid_string"))?;
-                                        let prev = record[1]
-                                            .as_str()
-                                            .ok_or_else(|| anyhow!("expecting_revision_string"))?;
-                                        let digest = record[2]
-                                            .as_str()
-                                            .ok_or_else(|| anyhow!("expecting_digest_string"))?;
-                                        let delta_digest = record[3]
-                                            .as_str()
-                                            .ok_or_else(|| anyhow!("expecting_digest_string"))?;
-                                        let prev = Revision::from(prev)?;
-                                        let r = Revision::new_with_delta(
-                                            prev.index + 1,
-                                            digest.to_string(),
-                                            delta_digest.to_string(),
-                                            Some(&prev),
-                                        );
-                                        if !self.documents.read().unwrap().contains_key(uuid) {
-                                            // FIXME: Should this be allowed?
-                                            // This might happen if we save the stage, then reload to a previous block
-                                            // were an object did not yet exist and then try to re-apply the stage
-                                            let mut rt = RevisionTree::new();
-                                            self.stage.write().unwrap().push(Change(
-                                                uuid.to_string(),
-                                                r.clone(),
-                                                Some(prev.clone()),
-                                            ));
-                                            rt.add(r, Some(prev));
-                                            self.documents
-                                                .write()
-                                                .unwrap()
-                                                .insert(uuid.to_string(), rt);
-                                        } else {
-                                            let mut docs = self.documents.write().unwrap();
-                                            let rt = docs.get_mut(uuid).unwrap();
-                                            if rt.add(r.clone(), Some(prev.clone())) {
+                                            let rt_w = rt.write().expect("failed_to_acquire_revision_tree_for_writing");
+                                            if rt_w.add(r.clone(), Some(prev.clone())) {
                                                 self.stage.write().unwrap().push(Change(
                                                     uuid.to_string(),
                                                     r,
@@ -1734,20 +1666,29 @@ impl Melda {
     /// let parent = replica.get_parent_revision("myobject", &newrev).unwrap().unwrap();
     /// assert_eq!(&parent, &winner);
     pub fn get_parent_revision(&self, uuid: &str, revision: &str) -> Result<Option<String>> {
-        let docs = self.documents.read().unwrap();
+        let docs = self.documents.read().expect("failed_to_acquire_documents_for_reading");
         let rt = docs.get(uuid).ok_or_else(|| anyhow!("unknown_document"))?;
         let revision = Revision::from(revision).expect("invalid_revision_string");
-        match rt.get_parent(&revision) {
+        let rt_r = rt.read().expect("failed_to_acquire_revision_tree_for_reading");
+        match rt_r.get_parent(&revision) {
             Some(r) => Ok(Some(r.to_string())),
             None => Ok(None),
         }
     }
 
+    // **********************************************************************
+    // **********************************************************************
+    //
+    // DELTA BLOCK SUPPORT FUNCTIONS
+    //
+    // **********************************************************************
+    // **********************************************************************
+
     // Fetch a block and verify digest
     fn fetch_raw_block(&self, blockid: &str) -> Result<Map<String, Value>> {
         let object = blockid.to_string() + DELTA_EXTENSION;
-        let data = self.data.read().unwrap();
-        let data = data.read_raw_object(object.as_str(), 0, 0)?;
+        let data = self.data.read().expect("cannot_acquire_data_for_reading");
+        let data = data.read_raw_bytes(object.as_str(), 0, 0)?;
         let digest = digest_bytes(data.as_slice());
         if !digest.eq(blockid) {
             bail!("mismatching_block_hash");
@@ -1779,7 +1720,7 @@ impl Melda {
                     .ok_or_else(|| anyhow!("packs_not_an_array"))?;
                 if !packs.iter().all(|x| {
                     if x.is_string() {
-                        let data = self.data.read().unwrap();
+                        let data = self.data.read().expect("cannot_acquire_data_for_reading");
                         data.is_readable_and_valid_pack(x.as_str().unwrap())
                             .unwrap_or(false)
                     } else {
@@ -1859,28 +1800,6 @@ impl Melda {
                                 let r =
                                     Revision::new(prev.index + 1, digest.to_string(), Some(&prev));
                                 cs.push(Change(uuid.to_string(), r, Some(prev)));
-                            } else if record.len() == 4 {
-                                // Update record with delta
-                                let uuid = record[0]
-                                    .as_str()
-                                    .ok_or_else(|| anyhow!("expecting_uuid_string"))?;
-                                let prev = record[1]
-                                    .as_str()
-                                    .ok_or_else(|| anyhow!("expecting_revision_string"))?;
-                                let digest = record[2]
-                                    .as_str()
-                                    .ok_or_else(|| anyhow!("expecting_digest_string"))?;
-                                let delta_digest = record[3]
-                                    .as_str()
-                                    .ok_or_else(|| anyhow!("expecting_digest_string"))?;
-                                let prev = Revision::from(prev)?;
-                                let r = Revision::new_with_delta(
-                                    prev.index + 1,
-                                    digest.to_string(),
-                                    delta_digest.to_string(),
-                                    Some(&prev),
-                                );
-                                cs.push(Change(uuid.to_string(), r, Some(prev)));
                             } else {
                                 bail!("invalid_changes_record")
                             }
@@ -1904,7 +1823,7 @@ impl Melda {
 
     fn check_block(&self, bid: &str) -> Status {
         let blocks = self.blocks.read().unwrap();
-        let data = self.data.read().unwrap();
+        let data = self.data.read().expect("cannot_acquire_data_for_reading");
         let packs = data.get_loaded_packs();
         if let Some(block) = blocks.get(bid) {
             // If the block status has been determined return the corresponding value
@@ -1951,17 +1870,91 @@ impl Melda {
         if let Some(changes) = &block.changes {
             for change in changes {
                 let Change(uuid, r, prev) = change;
-                if !self.documents.read().unwrap().contains_key(uuid) {
-                    let mut rt = RevisionTree::new();
-                    rt.add(r.clone(), prev.clone());
-                    self.documents.write().unwrap().insert(uuid.to_string(), rt);
-                } else {
-                    let mut docs = self.documents.write().unwrap();
-                    let rt = docs.get_mut(uuid).unwrap();
-                    rt.add(r.clone(), prev.clone());
-                }
+                let docs_w = self.documents.write().expect("cannot_acquire_documents_for_writing");
+                let rt_w = docs_w.get(uuid).get_or_insert(&RwLock::new(RevisionTree::new())).write().expect("cannot_acquire_revision_tree_for_writing");
+                drop(docs_w);
+                rt_w.add(r.clone(), prev.clone());
             }
         };
         Ok(())
     }
+
+
+    // **********************************************************************
+    // **********************************************************************
+    //
+    // ARRAY DESCRIPTOR SUPPORT FUNCTIONS
+    //
+    // **********************************************************************
+    // **********************************************************************
+
+    // Creates a delta array descriptor from the current obj
+    // Returns None if the delta is empty (i.e. the arrays are the same)
+    fn create_delta_array_descriptor(&self, obj: &Map<String,Value>, rt: &RevisionTree) -> Result<Option<Map<String,Value>>> {
+        Err(anyhow!("not implemented"))
+
+        // We create a delta descriptor starting from the winning revision
+    }
+
+    fn read_array_descriptor(&self, revision: &Revision) -> Result<ArrayDescriptor> {
+        let data_r = self.data.read().expect("cannot_acquire_data_for_reading");
+        let base_object = data_r.read_object(revision).expect("cannot_read_base_array_descriptor");
+        drop(data_r);
+        ArrayDescriptor::new_from_object(base_object)
+    }
+
+    fn get_full_order(&self, base_revision: &Revision, rt: &RevisionTree) -> Result<Vec<Value>> {
+        let base_descriptor = self.read_array_descriptor(base_revision)?;
+        if base_descriptor.is_diff() {
+            // We need to resolve the diff, first determine the history
+            let mut history = vec![];
+            let mut current = base_revision;
+            loop {
+                if let Some(new_current) = rt.get_parent(current) {
+                    history.push(new_current);
+                    current = new_current;
+                } else {
+                    break;
+                }
+            };
+            // We have the history of parent revisions, recover the objects
+            let mut descriptors = vec![base_descriptor];
+            let mut order;
+            for revision in history {
+                let descriptor = self.read_array_descriptor(revision)?;
+                if descriptor.is_diff() {
+                    descriptors.push(descriptor);
+                } else {
+                    order = descriptor.get_order().unwrap();
+                    break;
+                }
+            };
+            // Apply diffs
+            for d in descriptors.iter().rev() {
+                apply_diff_patch(&mut order, &d.get_patch().unwrap())?;
+             };
+             Ok(order)
+        } else {
+            Ok(base_descriptor.get_order().unwrap())
+        }
+    }
+
+    // Get a merged order for the given array descriptor tree
+    fn get_merged_order(&self, rt: &RevisionTree) -> Result<Vec<Value>> {
+        // The base object corresponds to the revision we want to keep (winner)
+        let base_revision = rt.get_winner().expect("missing_winning_revision");
+        let leafs = rt.get_leafs();
+        if leafs.len() > 1  {
+            let mut base_order = self.get_full_order(base_revision, rt)?;
+            for l in leafs {
+                let leaf_order = self.get_full_order(l, rt)?;
+                merge_arrays(&leaf_order, &mut base_order);
+            };
+            Ok(base_order)
+
+        } else {
+            self.get_full_order(base_revision, rt)
+        }
+    }
+
 }

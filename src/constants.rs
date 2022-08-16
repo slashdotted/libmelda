@@ -16,6 +16,12 @@
 
 ///  Suffix for non-reference strings
 pub const STRING_ESCAPE_PREFIX: &str = "!";
+///  Suffix for array descriptors
+pub const ARRAY_DESCRIPTOR_PREFIX: &str = "^";
+///  Delta order field in array descriptors
+pub const ARRAY_DESCRIPTOR_ORDER_FIELD: &str = "A";
+///  Delta order field in array descriptors
+pub const ARRAY_DESCRIPTOR_DELTA_ORDER_FIELD: &str = "a";
 /// Key suffix to trigger flattening of the associated value
 pub const FLATTEN_SUFFIX: &str = "\u{266D}";
 /// Patch command to insert a value
@@ -50,5 +56,3 @@ pub const EMPTY_HASH: &str = r#"e"#;
 pub const DELETED_HASH: &str = r#"d"#;
 /// Hash for resolved revisions
 pub const RESOLVED_HASH: &str = r#"r"#;
-/// Key prefix for arrays where deltas are to be computed
-pub const DELTA_PREFIX: &str = "\u{0394}";
