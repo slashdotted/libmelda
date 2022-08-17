@@ -380,7 +380,7 @@ impl Melda {
                     let digest = digest_object(&object).unwrap(); // Digest of the current object
                     if digest.ne(&winning_revision.digest) {
                         // Digest is different, there was an update
-                        let rev = Revision::new_updated(digest, &winning_revision);
+                        let rev = Revision::new_updated(digest, winning_revision);
                         let winning_revision = winning_revision.clone();
                         rt_w.add(rev.clone(), Some(winning_revision.clone()));
                         let mut data_w =
@@ -422,7 +422,7 @@ impl Melda {
                     .data
                     .read()
                     .expect("cannot_acquire_data_for_reading")
-                    .read_object(&winner)
+                    .read_object(winner)
                     .expect("cannot_read_object"))
             }
         } else {
@@ -1051,7 +1051,7 @@ impl Melda {
                 .expect("cannot_acquire_documents_for_writing");
             let mut rt_w = docs_w
                 .entry(uuid.to_string())
-                .or_insert(RwLock::new(RevisionTree::new()))
+                .or_insert_with(|| RwLock::new(RevisionTree::new()))
                 .write()
                 .expect("cannot_acquire_revision_tree_for_writing");
             rt_w.merge(&rt_r);
@@ -1163,7 +1163,7 @@ impl Melda {
                 .expect("cannot_get_documents_for_writing");
             let mut rt_w = docs_w
                 .entry(uuid.to_string())
-                .or_insert(RwLock::new(RevisionTree::new()))
+                .or_insert_with(|| RwLock::new(RevisionTree::new()))
                 .write()
                 .expect("cannot_acquire_revision_tree_for_writing");
             for (rev, prev) in other_rt_r.get_revisions() {
@@ -2071,7 +2071,7 @@ impl Melda {
                     .expect("cannot_acquire_documents_for_writing");
                 let mut rt_w = docs_w
                     .entry(uuid.to_string())
-                    .or_insert(RwLock::new(RevisionTree::new()))
+                    .or_insert_with(|| RwLock::new(RevisionTree::new()))
                     .write()
                     .expect("cannot_acquire_revision_tree_for_writing");
                 rt_w.add(r.clone(), prev.clone());

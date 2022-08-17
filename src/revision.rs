@@ -16,6 +16,7 @@
 use anyhow::{bail, Result};
 use lazy_static::lazy_static;
 use regex::Regex;
+use std::hash::Hash;
 
 use crate::constants::{DELETED_HASH, EMPTY_HASH, RESOLVED_HASH};
 use crate::utils::digest_string;
@@ -26,7 +27,7 @@ lazy_static! {
     static ref FIRST_REV: Regex = Regex::new(r"(?P<index>\d+)-(?P<digest>\w+)").unwrap();
 }
 
-#[derive(Debug, Clone, Hash)]
+#[derive(Debug, Clone)]
 pub struct Revision {
     pub index: u32,
     pub digest: String,
@@ -127,6 +128,15 @@ impl Revision {
     /// Returns true if the revision represents an empty object
     pub fn is_empty(&self) -> bool {
         self.digest == EMPTY_HASH
+    }
+}
+
+/// Basic hash implementation
+impl Hash for Revision {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.index.hash(state);
+        self.digest.hash(state);
+        self.tail.hash(state);
     }
 }
 
