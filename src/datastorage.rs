@@ -22,7 +22,6 @@ use lru::LruCache;
 use serde_json::json;
 use serde_json::Map;
 use serde_json::Value;
-use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
@@ -32,11 +31,8 @@ pub struct DataStorage {
     stage: HashMap<String, Value>,
     values: HashMap<String, (String, usize, usize)>,
     loaded_packs: BTreeSet<String>,
-    cache: Mutex<RefCell<LruCache<String, Map<String, Value>>>>,
-    force_full_array_interval: u32,
+    cache: Mutex<LruCache<String, Map<String, Value>>>,
 }
-
-
 
 impl DataStorage {
     /// Constructs a new Data storage based on the provided adapter
@@ -45,19 +41,12 @@ impl DataStorage {
             .unwrap_or_else(|_| "16".to_string())
             .parse::<u32>()
             .unwrap() as usize;
-        let full_array_interval = std::env::var("MELDA_FORCE_FULL_ARRAY_INTERVAL")
-            .unwrap_or_else(|_| "1000".to_string())
-            .parse::<u32>()
-            .unwrap();
         DataStorage {
             adapter,
             stage: HashMap::<String, Value>::new(),
             values: HashMap::<String, (String, usize, usize)>::new(),
             loaded_packs: BTreeSet::new(),
-            cache: Mutex::new(RefCell::new(LruCache::<String, Map<String, Value>>::new(
-                cache_size,
-            ))),
-            force_full_array_interval: full_array_interval,
+            cache: Mutex::new(LruCache::<String, Map<String, Value>>::new(cache_size)),
         }
     }
 
@@ -67,9 +56,7 @@ impl DataStorage {
             if !self.values.contains_key(digest) && !self.stage.contains_key(digest) {
                 self.write_raw_value(
                     digest,
-                    other
-                        .read_raw_value(digest)
-                        .expect("failed_to_read_data")
+                    other.read_raw_value(digest).expect("failed_to_read_data"),
                 )
                 .expect("failed_to_write_data");
             }
@@ -78,9 +65,7 @@ impl DataStorage {
             if !self.values.contains_key(digest) && !self.stage.contains_key(digest) {
                 self.write_raw_value(
                     digest,
-                    other
-                        .read_raw_value(digest)
-                        .expect("failed_to_read_data")
+                    other.read_raw_value(digest).expect("failed_to_read_data"),
                 )
                 .expect("failed_to_write_data");
             }
@@ -229,11 +214,7 @@ impl DataStorage {
     }
 
     /// Writes an object associating it with the given revision (digest)
-    pub fn write_object(
-        &mut self,
-        rev: &Revision,
-        obj: Map<String, Value>
-    ) -> Result<()> {
+    pub fn write_object(&mut self, rev: &Revision, obj: Map<String, Value>) -> Result<()> {
         if rev.is_resolved() || rev.is_deleted() || rev.is_empty() {
             Ok(())
         } else {
@@ -243,8 +224,7 @@ impl DataStorage {
             } else {
                 self.write_raw_value(&rev.digest, obj.clone().into())?;
                 {
-                    let cache_l = self.cache.lock().unwrap();
-                    let mut cache = cache_l.borrow_mut();
+                    let mut cache = self.cache.lock().unwrap();
                     cache.put(rev.digest.to_string(), obj); // Only cache the full object
                 }
                 Ok(())
@@ -252,127 +232,8 @@ impl DataStorage {
         }
     }
 
-
-/*
-    fn build_reconstruction_path<'a>(
-        &self,
-        fromrev: &'a Revision,
-        rt: &'a RevisionTree,
-    ) -> Result<ReconstructionPath<'a>> {
-        let mut reconstruction_path: Vec<&'a Revision> = vec![];
-        assert!(!fromrev.is_resolved());
-        let mut crev = fromrev;
-        let cache_l = self.cache.lock().unwrap();
-        let mut cache = cache_l.borrow_mut();
-        loop {
-            if crev.is_deleted() {
-                // Special case, deleted object
-                return Ok(ReconstructionPath {
-                    origin: json!({"_deleted":true}).as_object().unwrap().clone(),
-                    path: reconstruction_path,
-                });
-            } else if crev.is_empty() {
-                // Special case, empty object
-                return Ok(ReconstructionPath {
-                    origin: Map::<String, Value>::new(),
-                    path: reconstruction_path,
-                });
-            } else if cache.contains(&crev.digest) {
-                return Ok(ReconstructionPath {
-                    origin: cache.get(&crev.digest).unwrap().clone(),
-                    path: reconstruction_path,
-                });
-            } else if !crev.index == 1 {
-                // We reached the first revision (a non-delta revision)
-                // Otherwise read the data from the backend adapter
-                match self.read_data(&crev.digest)? {
-                    Some(o) => {
-                        let obj = o.as_object().ok_or_else(|| anyhow!("not_an_object"))?;
-                        return Ok(ReconstructionPath {
-                            origin: obj.clone(),
-                            path: reconstruction_path,
-                        });
-                    }
-                    None => {
-                        return Err(anyhow!("failed_to_read_object {}", crev.to_string()));
-                    }
-                }
-            } else {
-                // Store this delta revision in the reconstruction path
-                reconstruction_path.push(crev);
-                // Retrieve the parent revision
-                crev = match rt.get_parent(crev) {
-                    Some(r) => r,
-                    None => {
-                        return Err(anyhow!(
-                            "failed_to_determine_parent {} {:?}",
-                            crev.to_string(),
-                            reconstruction_path
-                        ))
-                    }
-                };
-            }
-        }
-    }
-
-
-    /// Reads and returns an array descriptor, reconstructing deltas if necessary
-    pub fn read_array_descriptor(&self, rev: &Revision, rt: &RevisionTree) -> Result<Vec<String>> {
-        if rev.index == 1 { // First revision
-
-        }
-
-
-        // Determine the reconstruction path
-        let rb = self.build_reconstruction_path(rev, rt)?;
-        // Obtain the origin array
-        let mut origin = rb.origin;
-        let mut order_array;
-        if let Some(base_array) = origin.get(ARRAY_DESCRIPTOR_ORDER_FIELD) {
-            if let Some(base_array) = base_array.as_array() {
-                order_array = base_array;
-            } else {
-                bail!(anyhow!("malformed_origin_array_descriptor"))
-            }
-        }
-        if let Some(base_array) = origin.get(ARRAY_DESCRIPTOR_DELTA_ORDER_FIELD) {
-            for r in rb.path.into_iter().rev() {
-                // Obtain corresponding object
-                if let Ok(Some(delta_descriptor)) = self.read_data(&r.digest) {
-                    if let Some(delta_descriptor) = delta_descriptor.as_object() {
-                        if let Some(patch) = delta_descriptor.get(ARRAY_DESCRIPTOR_ORDER_FIELD) {
-                            if let Some(patch) = patch.as_array() {
-                                // Apply patch
-                                apply_diff_patch(&mut order_array, &patch)?;
-                            } else {
-                                bail!(anyhow!("malformed_array_descriptor"))
-                            }
-                        } else {
-                            bail!(anyhow!("incomplete_array_descriptor"))
-                        }
-                    } else {
-                        bail!(anyhow!("descriptor_not_an_object"))
-                    }
-                }
-            }
-        } else {
-            bail!(anyhow!("invalid_origin_array_descriptor"))
-        }
-        // Update cache
-        {
-            let cache_l = self.cache.lock().unwrap();
-            let mut cache = cache_l.borrow_mut();
-            if !cache.contains(&rev.digest) {
-                cache.put(rev.digest.to_string(), origin.clone());
-            }
-        }
-        Ok(order_array.iter().map(|x| x.as_str().unwrap().to_string()).collect())
-    }*/
-
     /// Reads an object at the given revision
-    pub fn read_object(
-        &self,
-        revision: &Revision) -> Result<Map<String, Value>> {
+    pub fn read_object(&self, revision: &Revision) -> Result<Map<String, Value>> {
         if revision.is_deleted() {
             // Special case, deleted object
             Ok(json!({"_deleted":true}).as_object().unwrap().clone())
@@ -384,6 +245,8 @@ impl DataStorage {
             let mut o = Map::<String, Value>::new();
             o.insert(HASH_FIELD.to_string(), Value::from(revision.digest.clone()));
             Ok(o)
+        } else if let Some(object) = self.cache.lock().unwrap().get(&revision.digest) {
+            Ok(object.clone())
         } else {
             let value = self.read_raw_value(&revision.digest)?;
             let object = value.as_object().expect("expecting_an_object");

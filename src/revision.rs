@@ -26,7 +26,7 @@ lazy_static! {
     static ref FIRST_REV: Regex = Regex::new(r"(?P<index>\d+)-(?P<digest>\w+)").unwrap();
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash)]
 pub struct Revision {
     pub index: u32,
     pub digest: String,
@@ -62,6 +62,21 @@ impl Revision {
         }
     }
 
+    /// Constructs a new revision
+    pub fn new_updated<T>(digest: T, parent: &Revision) -> Revision
+    where
+        T: Into<String>,
+    {
+        Revision {
+            index: parent.index + 1,
+            digest: digest.into(),
+            tail: {
+                let fulltail = digest_string(&parent.to_string());
+                Some(fulltail[..7].to_string())
+            },
+        }
+    }
+
     /// Constructs a new deleted revision
     pub fn new_deleted(parent: &Revision) -> Revision {
         Revision::new(parent.index + 1, DELETED_HASH.to_string(), Some(parent))
@@ -83,19 +98,19 @@ impl Revision {
     #[allow(dead_code)]
     pub fn from(s: &str) -> Result<Revision> {
         match FULL_REV.captures(s) {
+            Some(r) => Ok(Revision {
+                index: r.name("index").unwrap().as_str().parse::<u32>().unwrap(),
+                digest: r.name("digest").unwrap().as_str().to_string(),
+                tail: Some(r.name("tail").unwrap().as_str().to_string()),
+            }),
+            None => match FIRST_REV.captures(s) {
                 Some(r) => Ok(Revision {
                     index: r.name("index").unwrap().as_str().parse::<u32>().unwrap(),
                     digest: r.name("digest").unwrap().as_str().to_string(),
-                    tail: Some(r.name("tail").unwrap().as_str().to_string()),
+                    tail: None,
                 }),
-                None => match FIRST_REV.captures(s) {
-                    Some(r) => Ok(Revision {
-                        index: r.name("index").unwrap().as_str().parse::<u32>().unwrap(),
-                        digest: r.name("digest").unwrap().as_str().to_string(),
-                        tail: None,
-                    }),
-                    None => bail!("invalid_revision_string: {}", s),
-                },
+                None => bail!("invalid_revision_string: {}", s),
+            },
         }
     }
 
@@ -120,10 +135,10 @@ impl ToString for Revision {
     fn to_string(&self) -> String {
         if self.index > 1 {
             self.index.to_string()
-                    + &String::from("-")
-                    + &self.digest
-                    + &String::from("_")
-                    + if let Some(t) = &self.tail { t } else { "" }
+                + &String::from("-")
+                + &self.digest
+                + &String::from("_")
+                + if let Some(t) = &self.tail { t } else { "" }
         } else {
             self.index.to_string() + "-" + &self.digest
         }
@@ -133,9 +148,7 @@ impl ToString for Revision {
 /// Comparison
 impl PartialEq for Revision {
     fn eq(&self, other: &Self) -> bool {
-        if self.index != other.index
-            || self.digest != other.digest
-        {
+        if self.index != other.index || self.digest != other.digest {
             false
         } else {
             self.tail.eq(&other.tail)

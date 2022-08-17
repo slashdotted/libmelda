@@ -19,9 +19,8 @@ use std::collections::HashMap;
 use yavomrs::yavom::{myers_unfilled, Move, Point};
 
 use crate::constants::{
-    ARRAY_DESCRIPTOR_PREFIX, EMPTY_HASH,
-    FLATTEN_SUFFIX, HASH_FIELD, ID_FIELD, PATCH_DELETE, PATCH_INSERT, ROOT_ID,
-    STRING_ESCAPE_PREFIX, ARRAY_DESCRIPTOR_ORDER_FIELD,
+    ARRAY_DESCRIPTOR_ORDER_FIELD, ARRAY_DESCRIPTOR_PREFIX, EMPTY_HASH, FLATTEN_SUFFIX, HASH_FIELD,
+    ID_FIELD, PATCH_DELETE, PATCH_INSERT, ROOT_ID, STRING_ESCAPE_PREFIX,
 };
 
 /// Returns true if the key matches a flattened field
@@ -95,8 +94,10 @@ pub fn generate_identifier(value: &Map<String, Value>, path: &[String]) -> Resul
     if value.contains_key(ID_FIELD) {
         let v = value.get(ID_FIELD).unwrap();
         if let Some(v) = v.as_str() {
-            if !is_array_descriptor(v) {
-                Err(anyhow!("user_object_identifier_cannot_begin_with_array_descriptor_prefix"))
+            if is_array_descriptor(v) {
+                Err(anyhow!(
+                    "user_object_identifier_cannot_begin_with_array_descriptor_prefix"
+                ))
             } else {
                 Ok(v.to_owned())
             }
@@ -106,9 +107,9 @@ pub fn generate_identifier(value: &Map<String, Value>, path: &[String]) -> Resul
     } else if path.is_empty() {
         Ok(ROOT_ID.to_string())
     } else {
-        // We assume that the string digest does not start with 
-        // the ARRAY_DESCRIPTOR_PREFIX (which is true, 
-        // since the prefix is the ^ character by default 
+        // We assume that the string digest does not start with
+        // the ARRAY_DESCRIPTOR_PREFIX (which is true,
+        // since the prefix is the ^ character by default
         // and the digest is an hex string)
         Ok(digest_string(&path.join("")))
     }
@@ -174,18 +175,16 @@ pub fn flatten(
                 .into_iter()
                 .filter(|(k, _)| *k != ID_FIELD)
                 .map(|(k, v)| {
-                    if k.ends_with(FLATTEN_SUFFIX) {
+                    if is_flattened_field(k) {
                         let mut fpath = fpath.clone();
                         fpath.push(k.clone());
                         let flattened = flatten(c, v, &fpath);
-                        if let Value::Array(a) = &flattened {
+                        if let Value::Array(_) = &flattened {
                             // We assume that all arrays will be stored as deltas from
                             // the previous version
                             let mut array_descriptor_object = Map::new();
-                            array_descriptor_object.insert(
-                                ARRAY_DESCRIPTOR_ORDER_FIELD.to_string(),
-                                    flattened,
-                                );
+                            array_descriptor_object
+                                .insert(ARRAY_DESCRIPTOR_ORDER_FIELD.to_string(), flattened);
                             let array_descriptor_uuid = ARRAY_DESCRIPTOR_PREFIX.to_string()
                                 + &digest_string(&fpath.join(""));
                             c.insert(array_descriptor_uuid.clone(), array_descriptor_object);
@@ -211,25 +210,26 @@ pub fn unflatten(c: &HashMap<String, Map<String, Value>>, value: &Value) -> Opti
         Value::String(s) => {
             if s.starts_with(STRING_ESCAPE_PREFIX) {
                 Some(Value::from(unescape(s)))
-            } else if s.starts_with(ARRAY_DESCRIPTOR_PREFIX) {
+            } else if is_array_descriptor(s) {
                 // Fetch corresponding descriptor
                 match c.get(s) {
                     Some(v) => {
                         if let Some(v) = v.get(ARRAY_DESCRIPTOR_ORDER_FIELD) {
                             if let Some(order) = v.as_array() {
-                                let mut array : Vec<Value> = vec![];
+                                let mut array: Vec<Value> = vec![];
                                 for uuid in order {
                                     if let Some(uuid) = uuid.as_str() {
                                         match c.get(uuid) {
                                             Some(o) => {
-                                                if let Some(item) = unflatten(c, &Value::from(o.clone())) {
+                                                if let Some(item) =
+                                                    unflatten(c, &Value::from(o.clone()))
+                                                {
                                                     array.push(item);
                                                 }
-                                            },
+                                            }
                                             None => (),
                                         }
                                     }
-                                    
                                 }
                                 Some(Value::from(array))
                             } else {
@@ -395,7 +395,9 @@ mod tests {
             generate_identifier(
                 json!({"_id":"foo","alpha":1234}).as_object_mut().unwrap(),
                 &path
-            ).unwrap() == "foo"
+            )
+            .unwrap()
+                == "foo"
         );
         let path: Vec<String> = vec!["foo", "bar", "baz"]
             .into_iter()
@@ -513,12 +515,15 @@ mod tests {
             let f = flatten(&mut c, &v, &path);
             assert!(f.is_string());
             assert!(f.as_str().unwrap() == ROOT_ID);
-            assert!(c.len() == 3);
+            assert!(c.len() == 4);
             assert!(c.contains_key(ROOT_ID));
             assert!(c.contains_key("foo"));
             assert!(c.contains_key("bar"));
             let content = serde_json::to_string(&c.get(ROOT_ID)).unwrap();
-            assert!(content == r#"{"data♭":["foo","bar"]}"#);
+            assert!(
+                content
+                    == r#"{"data♭":"^e13aaf01b21510d633e7e19d055f67c73f93a417d9b5a0099f76513f86dc6b00"}"#
+            );
             let content = serde_json::to_string(&c.get("foo")).unwrap();
             assert!(content == r#"{"value":3.14}"#);
             let content = serde_json::to_string(&c.get("bar")).unwrap();
