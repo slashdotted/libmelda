@@ -264,8 +264,8 @@ impl DataStorage {
 
     /// Reads a JSON value given its digest
     pub fn read_raw_value(&self, digest: &str) -> Result<Value> {
-        if self.values.contains_key(digest) {
-            let (pack, offset, length) = self.values.get(digest).unwrap();
+        if let Some(value) = self.values.get(digest) {
+            let (pack, offset, length) = value;
             let key = pack.clone() + PACK_EXTENSION;
             let data = self
                 .adapter
@@ -275,8 +275,8 @@ impl DataStorage {
             let json = std::str::from_utf8(&data)?;
             let json: Value = serde_json::from_str(json)?;
             Ok(json)
-        } else if self.stage.contains_key(digest) {
-            Ok(self.stage.get(digest).unwrap().clone())
+        } else if let Some(value) = self.stage.get(digest) {
+            Ok(value.clone())
         } else {
             Err(anyhow!("value_not_found"))
         }
