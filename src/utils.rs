@@ -233,13 +233,13 @@ pub fn unflatten(c: &HashMap<String, Map<String, Value>>, value: &Value) -> Opti
                                 }
                                 Some(Value::from(array))
                             } else {
-                                None
+                                panic!("expecting_order_field_in_descriptor_as_array")
                             }
                         } else {
-                            None
+                            panic!("expecting_order_field_in_descriptor")
                         }
                     }
-                    None => None,
+                    None => panic!("unknown_descriptor_object"),
                 }
             } else {
                 match c.get(s) {

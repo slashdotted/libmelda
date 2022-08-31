@@ -404,29 +404,20 @@ impl Melda {
         }
     }
 
-    pub fn read_object(&self, uuid: &str) -> Result<Map<String, Value>> {
-        let docs_r = self
-            .documents
-            .read()
-            .expect("cannot_acquire_documents_for_reading");
-        if let Some(rt) = docs_r.get(uuid) {
-            let rt_r = rt.read().expect("cannot_acquire_revision_tree_for_reading");
-            let winner = rt_r.get_winner().expect("object_has_no_winner");
-            if is_array_descriptor(uuid) {
-                let order = self
-                    .get_merged_order(&rt_r)
-                    .expect("cannot_get_merged_order");
-                Ok(ArrayDescriptor::new_from_order(order).to_json_object())
-            } else {
-                Ok(self
-                    .data
-                    .read()
-                    .expect("cannot_acquire_data_for_reading")
-                    .read_object(winner)
-                    .expect("cannot_read_object"))
-            }
+    fn read_object(&self, uuid: &str, rt: &RevisionTree) -> Result<Map<String, Value>> {
+        let winner = rt.get_winner().expect("object_has_no_winner");
+        if is_array_descriptor(uuid) {
+            let order = self
+                .get_merged_order(&rt)
+                .expect("cannot_get_merged_order");
+            Ok(ArrayDescriptor::new_from_order(order).to_json_object())
         } else {
-            Err(anyhow!("invalid object uuid"))
+            Ok(self
+                .data
+                .read()
+                .expect("cannot_acquire_data_for_reading")
+                .read_object(winner)
+                .expect("cannot_read_object"))
         }
     }
 
@@ -1216,21 +1207,13 @@ impl Melda {
                 .read()
                 .expect("failed_to_acquire_documents_for_reading");
             docs_r.par_iter().for_each(|(uuid, rt)| {
-                let rt_r = rt
-                    .read()
-                    .expect("failed_to_acquire_revision_tree_for_reading");
-                let base_revision = rt_r
-                    .get_winner()
-                    .ok_or_else(|| anyhow!("no_winner"))
-                    .unwrap();
-                if !base_revision.is_deleted() {
-                    let data = self.data.read().expect("cannot_acquire_data_for_reading");
-                    let mut obj = data.read_object(base_revision).unwrap();
-                    obj.insert(ID_FIELD.to_string(), Value::from(uuid.clone()));
-                    let mut c_w = c.lock().unwrap();
-                    c_w.insert(uuid.clone(), obj);
-                    drop(c_w);
-                }
+                let rt_r = rt.read().expect("failed_to_acquire_revision_tree_for_reading");
+                let mut obj = self.read_object(uuid, &rt_r).unwrap();
+                drop(rt_r);
+                obj.insert(ID_FIELD.to_string(), Value::from(uuid.clone()));
+                let mut c_w = c.lock().unwrap();
+                c_w.insert(uuid.clone(), obj);
+                drop(c_w);
             });
             let c_r = c.lock().unwrap();
             let root = c_r.get(ROOT_ID).expect("root_object_not_found");
