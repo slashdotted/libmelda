@@ -407,9 +407,7 @@ impl Melda {
     fn read_object(&self, uuid: &str, rt: &RevisionTree) -> Result<Map<String, Value>> {
         let winner = rt.get_winner().expect("object_has_no_winner");
         if is_array_descriptor(uuid) {
-            let order = self
-                .get_merged_order(&rt)
-                .expect("cannot_get_merged_order");
+            let order = self.get_merged_order(&rt).expect("cannot_get_merged_order");
             Ok(ArrayDescriptor::new_from_order(order).to_json_object())
         } else {
             Ok(self
@@ -1207,7 +1205,9 @@ impl Melda {
                 .read()
                 .expect("failed_to_acquire_documents_for_reading");
             docs_r.par_iter().for_each(|(uuid, rt)| {
-                let rt_r = rt.read().expect("failed_to_acquire_revision_tree_for_reading");
+                let rt_r = rt
+                    .read()
+                    .expect("failed_to_acquire_revision_tree_for_reading");
                 let mut obj = self.read_object(uuid, &rt_r).unwrap();
                 drop(rt_r);
                 obj.insert(ID_FIELD.to_string(), Value::from(uuid.clone()));
