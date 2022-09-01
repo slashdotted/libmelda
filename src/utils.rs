@@ -501,7 +501,7 @@ mod tests {
     fn test_flatten() {
         {
             let mut c = HashMap::<String, Map<String, Value>>::new();
-            let v = json!({ID_FIELD: ROOT_ID, "data" : [{ID_FIELD: "foo", "value": 3.14}, {ID_FIELD: "bar"}]});
+            let v = json!({ID_FIELD: ROOT_ID, "data" : [{ID_FIELD: "foo", "value": 1.23}, {ID_FIELD: "bar"}]});
             let path = vec![];
             let f = flatten(&mut c, &v, &path);
             assert!(f.is_string());
@@ -510,7 +510,7 @@ mod tests {
         }
         {
             let mut c = HashMap::<String, Map<String, Value>>::new();
-            let v = json!({ID_FIELD : ROOT_ID, "data\u{266D}" : [{ID_FIELD: "foo", "value": 3.14}, {ID_FIELD: "bar"}]});
+            let v = json!({ID_FIELD : ROOT_ID, "data\u{266D}" : [{ID_FIELD: "foo", "value": 1.23}, {ID_FIELD: "bar"}]});
             let path = vec![];
             let f = flatten(&mut c, &v, &path);
             assert!(f.is_string());
@@ -525,7 +525,7 @@ mod tests {
                     == r#"{"data♭":"^e13aaf01b21510d633e7e19d055f67c73f93a417d9b5a0099f76513f86dc6b00"}"#
             );
             let content = serde_json::to_string(&c.get("foo")).unwrap();
-            assert!(content == r#"{"value":3.14}"#);
+            assert!(content == r#"{"value":1.23}"#);
             let content = serde_json::to_string(&c.get("bar")).unwrap();
             assert!(content == r#"{}"#);
         }
