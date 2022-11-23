@@ -49,7 +49,7 @@ impl FilesystemAdapter {
 
     fn get_object_path(&self, key: &str) -> Result<(String, PathBuf)> {
         let prefix = &key[..2];
-        let subdirectory = self.path.clone().join(&prefix).join(key);
+        let subdirectory = self.path.clone().join(prefix).join(key);
         Ok((prefix.to_string(), subdirectory))
     }
 

@@ -81,7 +81,7 @@ impl Adapter for SqliteAdapter {
         let mut stmt = cn
             .prepare("SELECT value FROM entries WHERE key = ?1")
             .unwrap();
-        let result = stmt.query_row(&[&key], |row| {
+        let result = stmt.query_row([&key], |row| {
             let data: String = row.get(0)?;
             let data = base64::decode(data).expect("cannot_decode_data");
             if offset == 0 && length == 0 {
@@ -108,7 +108,7 @@ impl Adapter for SqliteAdapter {
         let value = base64::encode(data);
         match cn.execute(
             "INSERT OR IGNORE INTO entries (key, value) VALUES (?1,?2)",
-            &[&key, &value.as_str()],
+            [&key, &value.as_str()],
         ) {
             Ok(_) => Ok(()),
             Err(_) => Err(anyhow::anyhow!("cannot_write_object")),

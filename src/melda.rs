@@ -2118,13 +2118,9 @@ impl Melda {
                 let mut history = vec![];
                 history.reserve(base_revision.index as usize);
                 let mut current = base_revision;
-                loop {
-                    if let Some(new_current) = rt.get_parent(current) {
-                        history.push(new_current);
-                        current = new_current;
-                    } else {
-                        break;
-                    }
+                while let Some(new_current) = rt.get_parent(current) {
+                    history.push(new_current);
+                    current = new_current;
                     if cache.contains(current) {
                         break; // Break at last cached descriptor
                     }

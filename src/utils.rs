@@ -219,15 +219,12 @@ pub fn unflatten(c: &HashMap<String, Map<String, Value>>, value: &Value) -> Opti
                                 let mut array: Vec<Value> = vec![];
                                 for uuid in order {
                                     if let Some(uuid) = uuid.as_str() {
-                                        match c.get(uuid) {
-                                            Some(o) => {
-                                                if let Some(item) =
-                                                    unflatten(c, &Value::from(o.clone()))
-                                                {
-                                                    array.push(item);
-                                                }
+                                        if let Some(o) = c.get(uuid) {
+                                            if let Some(item) =
+                                                unflatten(c, &Value::from(o.clone()))
+                                            {
+                                                array.push(item);
                                             }
-                                            None => (),
                                         }
                                     }
                                 }
