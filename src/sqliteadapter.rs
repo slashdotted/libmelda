@@ -15,6 +15,7 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 use crate::adapter::Adapter;
 use anyhow::Result;
+use base64::{engine::general_purpose, Engine as _};
 use std::{cell::RefCell, sync::Mutex};
 
 /// Implements storage in a SQLite database
@@ -83,7 +84,9 @@ impl Adapter for SqliteAdapter {
             .unwrap();
         let result = stmt.query_row([&key], |row| {
             let data: String = row.get(0)?;
-            let data = base64::decode(data).expect("cannot_decode_data");
+            let data = general_purpose::STANDARD
+                .decode(data)
+                .expect("cannot_decode_data");
             if offset == 0 && length == 0 {
                 Ok(data)
             } else {
@@ -105,7 +108,7 @@ impl Adapter for SqliteAdapter {
     fn write_object(&self, key: &str, data: &[u8]) -> Result<()> {
         let mcn = self.cn.lock().unwrap();
         let cn = mcn.borrow_mut();
-        let value = base64::encode(data);
+        let value = general_purpose::STANDARD.encode(data);
         match cn.execute(
             "INSERT OR IGNORE INTO entries (key, value) VALUES (?1,?2)",
             [&key, &value.as_str()],

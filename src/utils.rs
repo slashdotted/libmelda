@@ -54,13 +54,9 @@ pub fn digest_string(content: &str) -> String {
 
 /// Computes the digest of a slice of bytes
 pub fn digest_bytes(content: &[u8]) -> String {
-    // FIXME: Evaluate openssl vs crypto
-    //let mut hasher = openssl::sha::Sha256::new();
-    //hasher.update(content);
-    //hex::encode(hasher.finish())
-    let mut hasher = crypto::sha2::Sha256::new();
-    crypto::digest::Digest::input(&mut hasher, content);
-    crypto::digest::Digest::result_str(&mut hasher)
+    let mut hasher = openssl::sha::Sha256::new();
+    hasher.update(content);
+    hex::encode(hasher.finish())
 }
 
 /// Computes the digest of a JSON object

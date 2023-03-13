@@ -1,6 +1,6 @@
 [package]
 name = "melda"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["Amos Brocco <amos.brocco@supsi.ch>"]
 edition = "2018"
 license = "GPL-3.0"
@@ -10,29 +10,30 @@ repository = "https://github.com/slashdotted/libmelda"
 
 [dependencies]
 yavomrs = "0.1.1"
-rust-crypto = "0.2.36"
+hex = "0.4.3"
 regex = "1.5.4"
 serde_json = "1.0"
 serde = "1.0.126"
 anyhow = "1.0.41"
 url = "2.2.2"
 lazy_static = "1.4.0"
-serial_test = "0.4.0"
-lru = "0.6.6"
+serial_test = "1.0.0"
+lru = "0.10.0"
+openssl = "0.10.45"
 
 # Solid Adapter dependencies
 rayon = "1.5.1"
 log = "0.4.14"
 flate2 = "1.0"
 reqwest = { version = "0.11.4", features = ["blocking", "cookies"], optional = true }
-rio_api = { version = "0.6.2", optional = true }
-rio_turtle = { version = "0.6.2", optional = true }
-oxiri = { version = ">=0.1,<0.3", optional = true }
-cacache = { version = "8.0.0", optional = true }
+rio_api = { version = "0.8.2", optional = true }
+rio_turtle = { version = "0.8.2", optional = true }
+oxiri = { version = "0.2.2", optional = true }
+cacache = { version = "11.4.0", optional = true }
 
 # SQLite Adapter dependencies
-base64 = { version = "0.13.0", optional = true }
-rusqlite = { version = "0.27.0", optional = true }
+base64 = { version = "0.21.0", optional = true }
+rusqlite = { version = "0.28.0", optional = true }
 
 # Brotli Adapter dependencies
 brotli = { version = "3.3.4", optional = true }
@@ -44,4 +45,4 @@ sqlitedb = [ "rusqlite", "base64"]
 brotliadapter = [ "brotli" ]
 
 [dev-dependencies]
-mktemp = "0.3.1"
+mktemp = "0.5.0"

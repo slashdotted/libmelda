@@ -24,6 +24,7 @@ use serde_json::Map;
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::collections::{HashMap, HashSet};
+use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex, RwLock};
 
 pub struct DataStorage {
@@ -46,7 +47,9 @@ impl DataStorage {
             stage: HashMap::<String, Value>::new(),
             values: HashMap::<String, (String, usize, usize)>::new(),
             loaded_packs: BTreeSet::new(),
-            cache: Mutex::new(LruCache::<String, Map<String, Value>>::new(cache_size)),
+            cache: Mutex::new(LruCache::<String, Map<String, Value>>::new(
+                NonZeroUsize::new(cache_size).unwrap(),
+            )),
         }
     }
 

@@ -31,6 +31,7 @@ use lru::LruCache;
 use rayon::prelude::*;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex, RwLock};
 
 /// Change triple (used for storing block changesets)
@@ -170,7 +171,7 @@ impl Melda {
             stage: RwLock::new(Vec::<Change>::new()),
             blocks: RwLock::new(BTreeMap::new()),
             array_descriptors_cache: Mutex::new(LruCache::<Revision, ArrayDescriptor>::new(
-                cache_size,
+                NonZeroUsize::new(cache_size).unwrap(),
             )),
         };
         dc.reload()?;
@@ -202,7 +203,7 @@ impl Melda {
             stage: RwLock::new(Vec::<Change>::new()),
             blocks: RwLock::new(BTreeMap::new()),
             array_descriptors_cache: Mutex::new(LruCache::<Revision, ArrayDescriptor>::new(
-                cache_size,
+                NonZeroUsize::new(cache_size).unwrap(),
             )),
         };
         dc.reload()?;
@@ -254,7 +255,7 @@ impl Melda {
             stage: RwLock::new(Vec::<Change>::new()),
             blocks: RwLock::new(BTreeMap::new()),
             array_descriptors_cache: Mutex::new(LruCache::<Revision, ArrayDescriptor>::new(
-                cache_size,
+                NonZeroUsize::new(cache_size).unwrap(),
             )),
         };
         dc.reload_until(block)?;
@@ -281,7 +282,7 @@ impl Melda {
             stage: RwLock::new(Vec::<Change>::new()),
             blocks: RwLock::new(BTreeMap::new()),
             array_descriptors_cache: Mutex::new(LruCache::<Revision, ArrayDescriptor>::new(
-                cache_size,
+                NonZeroUsize::new(cache_size).unwrap(),
             )),
         };
         dc.reload_until(block)?;
@@ -2128,7 +2129,7 @@ impl Melda {
                 // We have the history of parent revisions, recover the objects
                 let mut descriptors = vec![base_descriptor];
                 let mut order = vec![];
-                descriptors.reserve(history.len() as usize);
+                descriptors.reserve(history.len());
                 for revision in history {
                     if let Some(descriptor) = cache.get(revision) {
                         order = descriptor.get_order().clone().unwrap();

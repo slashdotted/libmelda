@@ -25,6 +25,7 @@ use rio_api::parser::TriplesParser;
 use rio_turtle::{TurtleError, TurtleParser};
 use std::cell::RefCell;
 use std::collections::BTreeSet;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Mutex;
 use std::{collections::HashMap, env};
@@ -86,7 +87,9 @@ impl SolidAdapter {
             folder: folder.trim_matches('/').to_string(),
             url: url.trim_matches('/').to_string(),
             client: Client::builder().cookie_store(true).build()?,
-            cache: Mutex::new(RefCell::new(LruCache::<String, Vec<u8>>::new(1024))),
+            cache: Mutex::new(RefCell::new(LruCache::<String, Vec<u8>>::new(
+                NonZeroUsize::new(1024).unwrap(),
+            ))),
             disk_cache_dir,
         };
         sa.authenticate()?;
