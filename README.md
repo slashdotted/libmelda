@@ -380,10 +380,11 @@ In the [Kibi](https://github.com/slashdotted/kibi) repository you will find an e
 # Publications
 
 ## 2022
-Amos Brocco "Melda: A General Purpose Delta State JSON CRDT". 9th Workshop on Principles and Practice of Consistency for Distributed Data (PaPoC'22). April 2022. (Accepted)
+Amos Brocco "Melda: A General Purpose Delta State JSON CRDT". 9th Workshop on Principles and Practice of Consistency for Distributed Data (PaPoC'22). April 2022. [PDF](https://amosbrocco.ch/pubs/PaPoC_2022_Submission.pdf) [BibTex](https://amosbrocco.ch/pubs/bib/PaPoC_2022_Submission.bib)
 
 ## 2021
-Amos Brocco "Delta-State JSON CRDT: Putting Collaboration on Solid Ground". (Brief announcement). 23rd International Symposium on Stabilization, Safety, and Security of Distributed Systems (SSS 2021). November 2021. 
+Amos Brocco "Delta-State JSON CRDT: Putting Collaboration on Solid Ground". (Brief announcement). 23rd International Symposium on Stabilization, Safety, and Security of Distributed Systems (SSS 2021). November 2021. [PDF](https://amosbrocco.ch/pubs/sss_2021_submission_13.pdf) [BibTex](https://amosbrocco.ch/pubs/bib/sss_2021_submission_13.bib)
+
 
 # Contact
 
