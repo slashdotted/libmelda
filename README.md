@@ -18,7 +18,7 @@ melda = { git = "https://github.com/slashdotted/libmelda" }
 or
 
 ```
-melda = "0.1.15"
+melda = "0.2.2"
 ```
 
 If using the [crate](https://crates.io/crates/melda)  from [crates.io](https://crates.io/crates/melda) adapt the version string as needed. Then import the required modules. For this example you will need:
@@ -298,10 +298,6 @@ The result, printed on the terminal should look like:
   "_id": "√",
   "items♭": [
     {
-      "_deleted": true,
-      "_id": "alice_todo_01"
-    },
-    {
       "_id": "bob_todo_01",
       "description": "Withdraw 500 to pay bill",
       "title": "Pay bills"
@@ -425,3 +421,7 @@ amos _dot_ brocco _at_ supsi _dot_ ch
 # License
 (c)2021-2022 Amos Brocco,
 GPL v3 (for now... but I will evaluate a change of license - to something like BSD3/MIT/... in the near future)
+
+# Acknowledgements
+
+Many thanks to @ngortheone (documentation updates, examples)
