@@ -237,7 +237,7 @@ pub fn unflatten(c: &HashMap<String, Map<String, Value>>, value: &Value) -> Opti
             } else {
                 match c.get(s) {
                     Some(v) => unflatten(c, &Value::from(v.clone())),
-                    None => None,
+                    None => Some(json!(null)),
                 }
             }
         }

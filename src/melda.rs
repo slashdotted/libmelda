@@ -442,6 +442,18 @@ impl Melda {
     /// let value = replica.get_value("myobject", &winner);
     /// assert!(value.is_ok());
     /// assert!(value.unwrap().contains_key("_deleted"));
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let adapter = Arc::new(RwLock::new(adapter));
+    /// let mut replica = Melda::new(adapter.clone()).expect("cannot_initialize_crdt");
+    /// let object = json!({ "somekey\u{266D}" : { "_id": "1", "key" : "alpha" }}).as_object().unwrap().clone();
+    /// replica.update(object.clone());
+    /// let readback = replica.read().unwrap();
+    /// let content = serde_json::to_string(&readback).unwrap();
+    /// assert_eq!("{\"_id\":\"\u{221A}\",\"somekey\u{266D}\":{\"_id\":\"1\",\"key\":\"alpha\"}}", content);
+    /// replica.delete_object("1");
+    /// let readback = replica.read().unwrap();
+    /// let content = serde_json::to_string(&readback).unwrap();
+    /// assert_eq!("{\"_id\":\"\u{221A}\",\"somekey\u{266D}\":null}", content);
     /// ```
     pub fn delete_object(&self, uuid: &str) -> Result<()> {
         let docs_r = self
@@ -1184,13 +1196,58 @@ impl Melda {
     /// assert!(readback.contains_key("somekey"));
     /// let content = serde_json::to_string(&readback).unwrap();
     /// assert_eq!("{\"_id\":\"\u{221A}\",\"somekey\":[\"somedata\",1,2,3,4]}", content);
-    /// let object = json!({ "\u{266D}somekey" : [ { "_id": "1", "key" : "alpha" }, { "_id": "2", "key" : "beta" } ] }).as_object().unwrap().clone();
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let adapter = Arc::new(RwLock::new(adapter));
+    /// let mut replica = Melda::new(adapter.clone()).expect("cannot_initialize_crdt");
+    /// let object = json!({ "somekey\u{266D}" : [ { "_id": "1", "key" : "alpha" }, { "_id": "2", "key" : "beta" } ] }).as_object().unwrap().clone();
     /// replica.update(object.clone());
     /// let readback = replica.read().unwrap();
     /// assert!(!readback.contains_key("somekey"));
-    /// assert!(readback.contains_key("\u{266D}somekey"));
+    /// assert!(readback.contains_key("somekey\u{266D}"));
     /// let content = serde_json::to_string(&readback).unwrap();
-    /// assert_eq!("{\"_id\":\"\u{221A}\",\"\u{266D}somekey\":[{\"_id\":\"1\",\"key\":\"alpha\"},{\"_id\":\"2\",\"key\":\"beta\"}]}", content);
+    /// assert_eq!("{\"_id\":\"\u{221A}\",\"somekey\u{266D}\":[{\"_id\":\"1\",\"key\":\"alpha\"},{\"_id\":\"2\",\"key\":\"beta\"}]}", content);
+    /// let info = json!({ "author" : "Some user", "date" : "2022-05-23 13:47:00CET" }).as_object().unwrap().clone();
+    /// replica.commit(Some(info));
+    /// let adapter2 : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let adapter2 = Arc::new(RwLock::new(adapter2));
+    /// let mut replica2 = Melda::new(adapter2.clone()).expect("cannot_initialize_crdt");
+    /// replica2.meld(&replica);
+    /// replica2.refresh();
+    /// // Continue editing on replica, removing one item
+    /// let object = json!({ "somekey\u{266D}" : [ { "_id": "2", "key" : "beta" } ] }).as_object().unwrap().clone();
+    /// replica.update(object.clone());
+    /// let readback = replica.read().unwrap();
+    /// let content = serde_json::to_string(&readback).unwrap();
+    /// assert_eq!("{\"_id\":\"\u{221A}\",\"somekey\u{266D}\":[{\"_id\":\"2\",\"key\":\"beta\"}]}", content);
+    /// // Commit changes on replica
+    /// let info = json!({ "author" : "Some user", "date" : "2022-05-23 13:47:00CET" }).as_object().unwrap().clone();
+    /// replica.commit(Some(info));
+    /// let readback = replica.read().unwrap();
+    /// let content = serde_json::to_string(&readback).unwrap();
+    /// assert_eq!("{\"_id\":\"\u{221A}\",\"somekey\u{266D}\":[{\"_id\":\"2\",\"key\":\"beta\"}]}", content);
+    /// // Perform some changes on replica2 too
+    /// let object = json!({ "somekey\u{266D}" : [ { "_id": "1", "key" : "alpha" }, { "_id": "2", "key" : "beta" }, { "_id": "3", "key" : "gamma" } ] }).as_object().unwrap().clone();
+    /// replica2.update(object.clone());
+    /// let readback = replica2.read().unwrap();
+    /// let content = serde_json::to_string(&readback).unwrap();
+    /// assert_eq!("{\"_id\":\"\u{221A}\",\"somekey\u{266D}\":[{\"_id\":\"1\",\"key\":\"alpha\"},{\"_id\":\"2\",\"key\":\"beta\"},{\"_id\":\"3\",\"key\":\"gamma\"}]}", content);
+    /// // Commit changes on replica2
+    /// let info = json!({ "author" : "Another user", "date" : "2022-05-23 13:48:00CET" }).as_object().unwrap().clone();
+    /// replica2.commit(Some(info));
+    /// let readback = replica2.read().unwrap();
+    /// let content = serde_json::to_string(&readback).unwrap();
+    /// assert_eq!("{\"_id\":\"\u{221A}\",\"somekey\u{266D}\":[{\"_id\":\"1\",\"key\":\"alpha\"},{\"_id\":\"2\",\"key\":\"beta\"},{\"_id\":\"3\",\"key\":\"gamma\"}]}", content);
+    /// // Meld changes from replica2 back on replica
+    /// replica.meld(&replica2);
+    /// // Melding does not change the state of replica
+    /// let readback = replica.read().unwrap();
+    /// let content = serde_json::to_string(&readback).unwrap();
+    /// assert_eq!("{\"_id\":\"\u{221A}\",\"somekey\u{266D}\":[{\"_id\":\"2\",\"key\":\"beta\"}]}", content);
+    /// // Refresh the state of replica
+    /// replica.refresh();
+    /// let readback = replica.read().unwrap();
+    /// let content = serde_json::to_string(&readback).unwrap();
+    /// assert_eq!("{\"_id\":\"\u{221A}\",\"somekey\u{266D}\":[{\"_id\":\"2\",\"key\":\"beta\"},{\"_id\":\"3\",\"key\":\"gamma\"}]}", content);
     pub fn read(&self) -> Result<Map<String, Value>> {
         if !self
             .documents
@@ -1209,12 +1266,16 @@ impl Melda {
                 let rt_r = rt
                     .read()
                     .expect("failed_to_acquire_revision_tree_for_reading");
-                let mut obj = self.read_object(uuid, &rt_r).unwrap();
-                drop(rt_r);
-                obj.insert(ID_FIELD.to_string(), Value::from(uuid.clone()));
-                let mut c_w = c.lock().unwrap();
-                c_w.insert(uuid.clone(), obj);
-                drop(c_w);
+                if let Some(winner) = rt_r.get_winner() {
+                    if !winner.is_deleted() {
+                        let mut obj = self.read_object(uuid, &rt_r).unwrap();
+                        drop(rt_r);
+                        obj.insert(ID_FIELD.to_string(), Value::from(uuid.clone()));
+                        let mut c_w = c.lock().unwrap();
+                        c_w.insert(uuid.clone(), obj);
+                        drop(c_w);
+                    }
+                }
             });
             let c_r = c.lock().unwrap();
             let root = c_r.get(ROOT_ID).expect("root_object_not_found");
