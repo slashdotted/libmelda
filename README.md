@@ -9,6 +9,8 @@ Melda natively supports the JSON data format and provides a way to synchronize c
 
 # How do I use Melda?
 
+The following guide is also availbe in [examples](./examples/simple.rs). You can run it with `cargo run --examples simple`.
+
 First of all, in **Cargo.toml** add the following dependency
 ```
 melda = { git = "https://github.com/slashdotted/libmelda" }
@@ -136,7 +138,7 @@ Valid schemes for the **get_adapter** function are:
 | SQLite (sqlite://)           | sqlite://mycrdtdocument                   | The name of the database is required (use **:memory:** for in-memory storage) |
 | SQLite w/Deflate compression (sqlite+flate://)           | sqlite+flate://mycrdtdocument     | The name of the database is required (use **:memory:** for in-memory storage) |
 | SQLite w/Brotli compression (sqlite+brotli://)           | sqlite+brotli://mycrdtdocument     | The name of the database is required (use **:memory:** for in-memory storage) |
- 
+
 For [Solid](https://solidproject.org/) Pod's access, a username and a password are required.
 
 ## Initializing Melda
@@ -181,7 +183,7 @@ todolist/
     └── b4e50e445542c4737f4cfd7a9193ffd3be3794049d361d114a44f36434257cb3.pack
 ```
 
-The **.delta** file is called **delta block**, and contains the versioning information of each object in the CRDT, whereas the **.pack** file is the **data pack** which stores the actual JSON content of each object. Each commit produces a new delta block (with a different name, which corresponds to the hash digest of its content) and possibly a data pack (if new JSON values are produced). The directory structure of the **todolist** directory organizes files into sub-directories according to their prefix. 
+The **.delta** file is called **delta block**, and contains the versioning information of each object in the CRDT, whereas the **.pack** file is the **data pack** which stores the actual JSON content of each object. Each commit produces a new delta block (with a different name, which corresponds to the hash digest of its content) and possibly a data pack (if new JSON values are produced). The directory structure of the **todolist** directory organizes files into sub-directories according to their prefix.
 
 We can perform another update using (again) the **update** method and commit the resulting changes:
 ```rust
@@ -223,7 +225,12 @@ println!("{}", content);
 
 This additional code will print the following on the terminal:
 ```json
-{"_id":"√","items♭":[{"_id":"alice_todo_01","description":"Go to the grocery store","title":"Buy milk"}],"software":"MeldaDo","version":"1.0.0"}
+{"_id":"√","items♭":
+    [
+        {"_id":"alice_todo_01","description":"Go to the grocery store","title":"Buy milk"}
+    ],
+    "software":"MeldaDo","version":"1.0.0"
+}
 ```
 
 Each object managed by Melda will contain the **_id** field with the corresponding unique identifier.
@@ -287,7 +294,32 @@ println!("{}", content);
 
 The result, printed on the terminal should look like:
 ```json
-{"_id":"√","items♭":[{"_id":"bob_todo_01","description":"Withdraw 500 to pay bill","title":"Pay bills"},{"_id":"bob_todo_02","description":"Call mom to schedule dinner","title":"Call mom"},{"_id":"alice_todo_02","description":"It must be a nice one","title":"Take picture of our dog"}],"software":"MeldaDo","version":"1.0.0"}
+{
+  "_id": "√",
+  "items♭": [
+    {
+      "_deleted": true,
+      "_id": "alice_todo_01"
+    },
+    {
+      "_id": "bob_todo_01",
+      "description": "Withdraw 500 to pay bill",
+      "title": "Pay bills"
+    },
+    {
+      "_id": "bob_todo_02",
+      "description": "Call mom to schedule dinner",
+      "title": "Call mom"
+    },
+    {
+      "_id": "alice_todo_02",
+      "description": "It must be a nice one",
+      "title": "Take picture of our dog"
+    }
+  ],
+  "software": "MeldaDo",
+  "version": "1.0.0"
+}
 ```
 
 As you can see, there is only one todo from Alice, as well as the two todos added by Bob.
