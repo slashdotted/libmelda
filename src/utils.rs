@@ -247,7 +247,7 @@ pub fn unflatten(c: &HashMap<String, Map<String, Value>>, value: &Value) -> Opti
         Value::Object(o) => Some(Value::from(
             o.iter()
                 .map(|(k, v)| {
-                    if !k.ends_with(FLATTEN_SUFFIX) {
+                    if !is_flattened_field(k) {
                         (k.clone(), v.clone())
                     } else {
                         (k.clone(), unflatten(c, v).unwrap())

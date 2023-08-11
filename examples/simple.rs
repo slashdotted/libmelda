@@ -125,7 +125,6 @@ fn main() {
     let content = serde_json::to_string_pretty(&data).unwrap();
     println!("alice pulled in bob's state");
     println!("{}", content);
-
 }
 
 pub fn copy_recursively(source: impl AsRef<Path>, destination: impl AsRef<Path>) -> io::Result<()> {
