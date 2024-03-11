@@ -9,7 +9,7 @@ Melda natively supports the JSON data format and provides a way to synchronize c
 
 # How do I use Melda?
 
-The following guide is also availbe in [examples](./examples/simple.rs). You can run it with `cargo run --examples simple`.
+The following guide is also available in [examples](./examples/simple.rs). You can run it with `cargo run --examples simple`.
 
 First of all, in **Cargo.toml** add the following dependency
 ```
