@@ -15,7 +15,7 @@ fn main() {
         Box::new(FilesystemAdapter::new("todolist_alice").expect("Cannot initialize adapter"));
 
     // initialize CRDT data structure
-    let melda_alice =
+    let mut melda_alice =
         Melda::new(Arc::new(RwLock::new(adapter_alice))).expect("Failed to inizialize Melda");
 
     // create new JSON object

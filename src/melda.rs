@@ -40,9 +40,8 @@ struct Change(String, Revision, Option<Revision>);
 
 /// Melda is a Delta-State CRDT for arbitrary JSON documents.
 pub struct Melda {
-    documents: RwLock<BTreeMap<String, RwLock<RevisionTree>>>,
+    documents: RwLock<BTreeMap<String, Mutex<RevisionTree>>>,
     data: RwLock<DataStorage>,
-    stage: RwLock<Vec<Change>>,
     blocks: RwLock<BTreeMap<String, RwLock<Block>>>,
     array_descriptors_cache: Mutex<LruCache<Revision, ArrayDescriptor>>,
 }
@@ -166,9 +165,8 @@ impl Melda {
             .parse::<u32>()
             .unwrap() as usize;
         let dc = Melda {
-            documents: RwLock::new(BTreeMap::<String, RwLock<RevisionTree>>::new()),
+            documents: RwLock::new(BTreeMap::<String, Mutex<RevisionTree>>::new()),
             data: RwLock::new(DataStorage::new(adapter.clone())),
-            stage: RwLock::new(Vec::<Change>::new()),
             blocks: RwLock::new(BTreeMap::new()),
             array_descriptors_cache: Mutex::new(LruCache::<Revision, ArrayDescriptor>::new(
                 NonZeroUsize::new(cache_size).unwrap(),
@@ -198,9 +196,8 @@ impl Melda {
             .unwrap() as usize;
         let adapter = Arc::new(RwLock::new(crate::adapter::get_adapter(url).unwrap()));
         let dc = Melda {
-            documents: RwLock::new(BTreeMap::<String, RwLock<RevisionTree>>::new()),
+            documents: RwLock::new(BTreeMap::<String, Mutex<RevisionTree>>::new()),
             data: RwLock::new(DataStorage::new(adapter.clone())),
-            stage: RwLock::new(Vec::<Change>::new()),
             blocks: RwLock::new(BTreeMap::new()),
             array_descriptors_cache: Mutex::new(LruCache::<Revision, ArrayDescriptor>::new(
                 NonZeroUsize::new(cache_size).unwrap(),
@@ -250,9 +247,8 @@ impl Melda {
             .parse::<u32>()
             .unwrap() as usize;
         let dc = Melda {
-            documents: RwLock::new(BTreeMap::<String, RwLock<RevisionTree>>::new()),
+            documents: RwLock::new(BTreeMap::<String, Mutex<RevisionTree>>::new()),
             data: RwLock::new(DataStorage::new(adapter.clone())),
-            stage: RwLock::new(Vec::<Change>::new()),
             blocks: RwLock::new(BTreeMap::new()),
             array_descriptors_cache: Mutex::new(LruCache::<Revision, ArrayDescriptor>::new(
                 NonZeroUsize::new(cache_size).unwrap(),
@@ -277,9 +273,8 @@ impl Melda {
             .unwrap() as usize;
         let adapter = Arc::new(RwLock::new(crate::adapter::get_adapter(url).unwrap()));
         let dc = Melda {
-            documents: RwLock::new(BTreeMap::<String, RwLock<RevisionTree>>::new()),
+            documents: RwLock::new(BTreeMap::<String, Mutex<RevisionTree>>::new()),
             data: RwLock::new(DataStorage::new(adapter.clone())),
-            stage: RwLock::new(Vec::<Change>::new()),
             blocks: RwLock::new(BTreeMap::new()),
             array_descriptors_cache: Mutex::new(LruCache::<Revision, ArrayDescriptor>::new(
                 NonZeroUsize::new(cache_size).unwrap(),
@@ -323,16 +318,12 @@ impl Melda {
             .expect("cannot_acquire_documents_for_writing");
         let mut rt_w = docs_w
             .entry(uuid.to_string())
-            .or_insert_with(|| RwLock::new(RevisionTree::new()))
-            .write()
+            .or_insert_with(|| Mutex::new(RevisionTree::new()))
+            .lock()
             .expect("cannot_acquire_revision_tree_for_writing");
-        rt_w.add(rev.clone(), None);
+        rt_w.add(rev.clone(), None, true);
         drop(rt_w);
         drop(docs_w);
-        self.stage
-            .write()
-            .expect("cannot_acquire_stage_for_writing")
-            .push(Change(uuid.to_owned(), rev, None));
         Ok(())
     }
 
@@ -364,7 +355,7 @@ impl Melda {
         if let Some(rt) = docs_r.get(uuid) {
             // Existing object
             let mut rt_w = rt
-                .write()
+                .lock()
                 .expect("cannot_acquire_revision_tree_for_writing");
             if let Some(winning_revision) = rt_w.get_winner() {
                 // If its an array descriptor first need to compute the delta
@@ -383,16 +374,11 @@ impl Melda {
                         // Digest is different, there was an update
                         let rev = Revision::new_updated(digest, winning_revision);
                         let winning_revision = winning_revision.clone();
-                        rt_w.add(rev.clone(), Some(winning_revision.clone()));
+                        rt_w.add(rev.clone(), Some(winning_revision.clone()), true);
                         let mut data_w =
                             self.data.write().expect("cannot_acquire_data_for_writing");
                         data_w.write_object(&rev, object).unwrap();
                         drop(data_w);
-                        self.stage.write().unwrap().push(Change(
-                            uuid.to_string(),
-                            rev,
-                            Some(winning_revision),
-                        ));
                     }
                 }
             }
@@ -462,23 +448,22 @@ impl Melda {
             .expect("cannot_acquire_documents_for_reading");
         if let Some(rt) = docs_r.get(uuid) {
             let mut rt_w = rt
-                .write()
+                .lock()
                 .expect("cannot_acquire_revision_tree_for_writing");
             if let Some(winning_revision) = rt_w.get_winner() {
                 if !winning_revision.is_deleted() && !winning_revision.is_resolved() {
                     let rev = Revision::new_deleted(winning_revision);
                     let winning_revision = winning_revision.clone();
-                    rt_w.add(rev.clone(), Some(winning_revision.clone()));
-                    self.stage.write().unwrap().push(Change(
-                        uuid.to_string(),
-                        rev,
-                        Some(winning_revision),
-                    ));
+                    rt_w.add(rev.clone(), Some(winning_revision.clone()), true);
                 }
             }
         }
         Ok(())
     }
+
+    // TODO: Maybe we could use the same logic for commit and stage / apply_block and replay_stage
+    // for in both we create or apply a block
+    // in commit we need to clear the stage afterwards and we need to write the pack and the block
 
     /// Commits changes to the backend adapter
     ///
@@ -506,31 +491,40 @@ impl Melda {
     /// assert!(value.unwrap().contains_key("_deleted"));
     /// let info = json!({ "author" : "Some user", "date" : "2022-05-23 13:47:00CET" }).as_object().unwrap().clone();
     /// replica.commit(Some(info));
+    /// assert!(replica.get_all_objects().contains("myobject"));
+    /// let winner2 = replica.get_winner("myobject").unwrap();
+    /// assert_eq!("2-d_e5d1d20", winner2);
+    /// let value2 = replica.get_value("myobject", &winner);
+    /// assert!(value2.is_ok());
+    /// assert!(value2.unwrap().contains_key("_deleted"));
     /// ```
     pub fn commit(&self, information: Option<Map<String, Value>>) -> Result<Option<String>> {
-        let stage = self.stage.read().unwrap();
-        if stage.is_empty() {
-            return Ok(None);
-        }
-        drop(stage);
+        // TODO: Fix logic
         let mut block = Map::<String, Value>::new();
         let mut data = self.data.write().expect("cannot_acquire_data_for_writing");
         let _packid = data.pack()?;
         // Process stage
         let mut changes = Vec::<Value>::new();
-        for Change(uuid, rev, prev) in self.stage.read().unwrap().iter() {
-            if prev.is_none() {
-                // Creation record
-                let tuple = vec![uuid.clone(), rev.digest.clone()];
-                changes.push(Value::from(tuple));
-            } else {
-                // Update record
-                let triple = vec![
-                    uuid.clone(),
-                    prev.as_ref().unwrap().to_string(),
-                    rev.digest.clone(),
-                ];
-                changes.push(Value::from(triple));
+        for (uuid, rt) in self.documents.read().unwrap().iter() {
+            let rt_rw  =  rt.lock().expect("cannot_acquire_revision_tree_for_commit");
+            if rt_rw.has_staging() {
+                rt_rw.get_revisions().iter().for_each(|rte| {
+                    if rte.is_staging() {
+                        if rte.get_parent().is_none() {
+                            // Creation record
+                            let tuple = vec![uuid.clone(), rte.get_revision().digest.clone()];
+                            changes.push(Value::from(tuple));
+                        } else {
+                            // Update record
+                            let triple = vec![
+                                uuid.clone(),
+                                rte.get_parent().as_ref().unwrap().to_string(),
+                                rte.get_revision().digest.clone(),
+                            ];
+                            changes.push(Value::from(triple));
+                        }
+                    }
+                })
             }
         }
         block.insert(CHANGESETS_FIELD.to_string(), Value::from(changes));
@@ -554,8 +548,6 @@ impl Melda {
         let block_hash = digest_string(&blockstr);
         let blockid = block_hash.clone() + DELTA_EXTENSION;
         data.write_raw_bytes(&blockid, blockstr.as_bytes())?;
-        // Clears the stage
-        self.stage.write().unwrap().clear();
         // Load the block
         drop(data);
         let mut b = self.parse_raw_block(block_hash.clone(), block).unwrap();
@@ -564,6 +556,11 @@ impl Melda {
             .write()
             .unwrap()
             .insert(block_hash.clone(), RwLock::new(b));
+        // Commit changes
+        for (_, rt) in self.documents.read().unwrap().iter() {
+            let mut rt_rw  =  rt.lock().expect("cannot_acquire_revision_tree_for_commit");
+            rt_rw.commit();
+        }
         Ok(Some(block_hash))
     }
 
@@ -695,7 +692,7 @@ impl Melda {
     /// ```    
     pub fn reload(&self) -> Result<()> {
         // Check that stage is empty, otherwise fail (user must unstage explicity if necessary)
-        if !self.stage.read().unwrap().is_empty() {
+        if self.has_staging() {
             bail!("stage_not_empty")
         }
         // Clear the documents
@@ -769,20 +766,16 @@ impl Melda {
     /// let winner = replica.get_winner("myobject").unwrap();
     /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
     /// ```    
-    pub fn refresh(&self) -> Result<()> {
-        // 1. Save stage
-        let stage = self.stage()?;
-        // 2. Unstage
-        self.unstage()?;
-        // 3. Get new list of blocks
+    pub fn refresh(&mut self) -> Result<()> {
+        // 1. Get new list of blocks
         let data_r = self.data.read().expect("cannot_acquire_data_for_writing");
         let list_str = data_r.list_raw_items(DELTA_EXTENSION)?;
         drop(data_r);
-        // 4. Refresh data storage
+        // 2. Refresh data storage
         let mut data_w = self.data.write().expect("cannot_acquire_data_for_writing");
         data_w.refresh()?;
         drop(data_w);
-        // 5. Load new blocks
+        // 3. Load new blocks
         if !list_str.is_empty() {
             for i in &list_str {
                 let is_new_block = !self
@@ -802,7 +795,7 @@ impl Melda {
                 }
             }
         }
-        // 6. Turn invalid blocks into unknown status blocks
+        // 4. Turn invalid blocks into unknown status blocks
         let blocks_r = self
             .blocks
             .read()
@@ -820,9 +813,9 @@ impl Melda {
             }
         });
         drop(blocks_r);
-        // 7. Mark valid blocks
+        // 5. Mark valid blocks
         self.mark_valid_blocks();
-        // 8. Apply all valid blocks
+        // 6. Apply all valid blocks
         let blocks_r = self
             .blocks
             .read()
@@ -842,8 +835,6 @@ impl Melda {
             }
         });
         drop(blocks_r);
-        // 9. Re-apply stage
-        self.replay_stage(&stage)?;
         Ok(())
     }
 
@@ -881,15 +872,14 @@ impl Melda {
     /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
     /// ```
     pub fn reload_until(&self, block_id: &str) -> Result<()> {
-        let stage_r = self.stage.read().expect("cannot_acquire_stage_for_reading");
+        // Ensure that the stage is empty
+        if self.has_staging() {
+            bail!("stage_not_empty")
+        }
         let mut documents_w = self
             .documents
             .write()
             .expect("cannot_acquire_documents_for_writing");
-        // Ensure that the stage is empty
-        if !stage_r.is_empty() {
-            bail!("stage_not_empty")
-        }
         // Clear the documents
         documents_w.clear();
         drop(documents_w);
@@ -988,29 +978,17 @@ impl Melda {
     /// let winner = replica.get_winner("myobject").unwrap();
     /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
     /// ```
-    pub fn unstage(&self) -> Result<()> {
+    pub fn unstage(&mut self) -> Result<()> {
         self.data
             .write()
             .expect("cannot_acquire_data_for_writing")
             .unstage()?;
-        let mut stage = self.stage.write().unwrap();
         let mut docs_w = self
             .documents
             .write()
             .expect("failed_to_acquire_documents_for_writing");
-        stage.iter().for_each(|Change(uuid, rev, prev)| {
-            if let Some(rt) = docs_w.get(uuid) {
-                let mut rt_w = rt
-                    .write()
-                    .expect("cannot_acquire_revision_tree_for_writing");
-                rt_w.remove(rev.clone(), prev.clone());
-                if rt_w.is_empty() {
-                    drop(rt_w);
-                    docs_w.remove(uuid);
-                }
-            }
-        });
-        stage.clear();
+        docs_w.par_iter_mut().for_each(|(_, rt_w)| rt_w.lock().expect("cannot_acquire_revision_tree_for_writing").unstage());
+        docs_w.retain(|_, rt| !rt.lock().expect("cannot_acquire_revision_tree_for_reading").is_empty());
         Ok(())
     }
 
@@ -1045,7 +1023,7 @@ impl Melda {
     pub fn merge(&self, other: &Melda) -> Result<()> {
         for (uuid, rt) in other.documents.read().unwrap().iter() {
             let rt_r = rt
-                .read()
+                .lock()
                 .expect("failed_to_acquire_revision_tree_for_reading");
             let mut docs_w = self
                 .documents
@@ -1053,8 +1031,8 @@ impl Melda {
                 .expect("cannot_acquire_documents_for_writing");
             let mut rt_w = docs_w
                 .entry(uuid.to_string())
-                .or_insert_with(|| RwLock::new(RevisionTree::new()))
-                .write()
+                .or_insert_with(|| Mutex::new(RevisionTree::new()))
+                .lock()
                 .expect("cannot_acquire_revision_tree_for_writing");
             rt_w.merge(&rt_r);
             drop(rt_r);
@@ -1144,11 +1122,10 @@ impl Melda {
     pub fn replicate(&self, other: &Melda) -> Result<()> {
         let other_data = other.data.read().unwrap();
         let other_documents = other.documents.read().unwrap();
-        let other_stage = other.stage.read().unwrap();
-        if !self.stage.read().unwrap().is_empty() {
+        if self.has_staging() {
             bail!("stage_not_empty")
         }
-        if !other_stage.is_empty() {
+        if other.has_staging() {
             bail!("other_stage_not_empty")
         }
         self.data
@@ -1157,7 +1134,7 @@ impl Melda {
             .replicate(&other_data)?;
         for (uuid, other_rt) in other_documents.iter() {
             let other_rt_r = other_rt
-                .read()
+                .lock()
                 .expect("failed_to_acquire_revision_tree_for_reading");
             let mut docs_w = self
                 .documents
@@ -1165,16 +1142,11 @@ impl Melda {
                 .expect("cannot_get_documents_for_writing");
             let mut rt_w = docs_w
                 .entry(uuid.to_string())
-                .or_insert_with(|| RwLock::new(RevisionTree::new()))
-                .write()
+                .or_insert_with(|| Mutex::new(RevisionTree::new()))
+                .lock()
                 .expect("cannot_acquire_revision_tree_for_writing");
-            for (rev, prev) in other_rt_r.get_revisions() {
-                if rt_w.add(rev.clone(), prev.clone()) {
-                    self.stage
-                        .write()
-                        .expect("cannot_get_stage_for_writing")
-                        .push(Change(uuid.clone(), rev.clone(), prev.clone()));
-                }
+            for rte in other_rt_r.get_revisions() {
+                rt_w.add(rte.get_revision().clone(), rte.get_parent().clone(), rte.is_staging());
             }
         }
         Ok(())
@@ -1264,7 +1236,7 @@ impl Melda {
                 .expect("failed_to_acquire_documents_for_reading");
             docs_r.par_iter().for_each(|(uuid, rt)| {
                 let rt_r = rt
-                    .read()
+                    .lock()
                     .expect("failed_to_acquire_revision_tree_for_reading");
                 if let Some(winner) = rt_r.get_winner() {
                     if !winner.is_deleted() {
@@ -1272,7 +1244,7 @@ impl Melda {
                         drop(rt_r);
                         obj.insert(ID_FIELD.to_string(), Value::from(uuid.clone()));
                         let mut c_w = c.lock().unwrap();
-                        c_w.insert(uuid.clone(), obj);
+                        c_w.insert(uuid.to_string(), obj);
                         drop(c_w);
                     }
                 }
@@ -1366,22 +1338,17 @@ impl Melda {
     /// let conflicting = replica2.in_conflict();
     /// assert!(conflicting.contains("myobject"));
     pub fn in_conflict(&self) -> BTreeSet<String> {
-        let mut result = BTreeSet::new();
-        // TODO: Make parallel
         self.documents
             .read()
             .expect("failed_to_acquire_documents_for_reading")
-            .iter()
-            .for_each(|(uuid, rt)| {
+            .par_iter()
+            .filter(|(_, rt)| {
                 let rt_r = rt
-                    .read()
+                    .lock()
                     .expect("failed_to_acquire_revision_tree_for_reading");
                 let l = rt_r.get_leafs();
-                if l.len() > 1 {
-                    result.insert(uuid.clone());
-                }
-            });
-        result
+                l.len() > 1
+            }).map(|(uuid, _)| uuid.clone()).collect()
     }
 
     /// Returns the winning revision for the given object
@@ -1426,7 +1393,7 @@ impl Melda {
             .get(uuid.as_ref())
         {
             Some(rt) => {
-                let rt_r = rt.read().expect("cannot_acquire_revision_tree_for_reading");
+                let rt_r = rt.lock().expect("cannot_acquire_revision_tree_for_reading");
                 match rt_r.get_winner() {
                     Some(r) => Ok(r.to_string()),
                     None => Err(anyhow!("no_winner")),
@@ -1480,7 +1447,7 @@ impl Melda {
         {
             Some(rt) => {
                 let rt_r = rt
-                    .read()
+                    .lock()
                     .expect("failed_to_acquire_revision_tree_for_reading");
                 let w = rt_r.get_winner().ok_or_else(|| anyhow!("no_winner"))?;
                 let l = rt_r.get_leafs();
@@ -1544,7 +1511,7 @@ impl Melda {
                 .get(uuid)
                 .ok_or_else(|| anyhow!("unknown_document"))?;
             let rt_r = rt
-                .read()
+                .lock()
                 .expect("failed_to_acquire_revision_tree_for_reading");
             {
                 let leafs = rt_r.get_leafs();
@@ -1574,7 +1541,7 @@ impl Melda {
             .get(uuid)
             .ok_or_else(|| anyhow!("unknown_document"))?;
         let rt_r = rt
-            .read()
+            .lock()
             .expect("failed_to_acquire_revision_tree_for_reading");
         let winner = rt_r
             .get_winner()
@@ -1591,7 +1558,7 @@ impl Melda {
             .get_mut(uuid)
             .ok_or_else(|| anyhow!("unknown_document"))?;
         let rt_r = rt
-            .read()
+            .lock()
             .expect("failed_to_acquire_revision_tree_for_reading");
         let leafs: Vec<Revision> = rt_r.get_leafs().iter().map(|r| (*r).clone()).collect();
         drop(rt_r);
@@ -1599,15 +1566,9 @@ impl Melda {
             if r != winner {
                 let resolved = Revision::new_resolved(&r);
                 let mut rt_w = rt
-                    .write()
+                    .lock()
                     .expect("failed_to_acquire_revision_tree_for_writing");
-                if rt_w.add(resolved.clone(), Some(r.clone())) {
-                    self.stage.write().unwrap().push(Change(
-                        uuid.to_string(),
-                        resolved,
-                        Some(r.clone()),
-                    ));
-                }
+                rt_w.add(resolved.clone(), Some(r.clone()), true);
             }
         }
         Ok(winner.to_string())
@@ -1647,31 +1608,73 @@ impl Melda {
     pub fn stage(&self) -> Result<Option<Value>> {
         let mut r = Map::<String, Value>::new();
         let data = self.data.read().expect("cannot_acquire_data_for_reading");
-        let data_stage = data.stage()?;
-        r.insert(OBJECTS_FIELD.to_string(), data_stage);
-        let rur = self.stage.read().unwrap();
-        if !rur.is_empty() {
+        if data.has_staging() {
+            let data_stage = data.stage()?;
+            r.insert(OBJECTS_FIELD.to_string(), data_stage);
+        }
+        if self.has_staging() {
             let mut changes = Vec::<Value>::new();
-            for Change(uuid, rev, prev) in rur.iter() {
-                if prev.is_none() {
-                    // Creation record
-                    let tuple = vec![uuid.clone(), rev.digest.clone()];
-                    changes.push(Value::from(tuple));
-                } else {
-                    // Update record
-                    let triple = vec![
-                        uuid.clone(),
-                        prev.as_ref().unwrap().to_string(),
-                        rev.digest.clone(),
-                    ];
-                    changes.push(Value::from(triple));
+            for (uuid, rt) in self.documents.read().unwrap().iter() {
+                let rt_rw  =  rt.lock().expect("cannot_acquire_revision_tree_for_commit");
+                if rt_rw.has_staging() {
+                    rt_rw.get_revisions().iter().for_each(|rte| {
+                        if rte.is_staging() {
+                            if rte.get_parent().is_none() {
+                                // Creation record
+                                let tuple = vec![uuid.clone(), rte.get_revision().digest.clone()];
+                                changes.push(Value::from(tuple));
+                            } else {
+                                // Update record
+                                let triple = vec![
+                                    uuid.clone(),
+                                    rte.get_parent().as_ref().unwrap().to_string(),
+                                    rte.get_revision().digest.clone(),
+                                ];
+                                changes.push(Value::from(triple));
+                            }
+                        }
+                    });
                 }
             }
             r.insert(CHANGESETS_FIELD.to_string(), Value::from(changes));
-            Ok(Some(Value::from(r)))
+        }
+        if !r.is_empty() {
+            Ok(Some(Value::from(r)))    
         } else {
             Ok(None)
         }
+    }
+
+    /// Returns true if there are staged changes
+    ///
+    /// # Example
+    /// ```
+    /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
+    /// use std::sync::{Arc, Mutex, RwLock};
+    /// use serde_json::{Map, Value,json};
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let adapter = Arc::new(RwLock::new(adapter));
+    /// let mut replica = Melda::new(adapter.clone()).expect("cannot_initialize_crdt");
+    /// assert!(!replica.has_staging());
+    /// let object = json!({ "somekey" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
+    /// let object2 = json!({ "somekey2" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
+    /// replica.create_object("myobject", object.clone());  
+    /// assert!(replica.has_staging());
+    /// replica.unstage();
+    /// assert!(!replica.has_staging());
+    /// replica.create_object("myobject", object.clone());  
+    /// assert!(replica.has_staging());
+    /// let block_id = replica.commit(None).unwrap().unwrap();
+    /// assert!(!replica.has_staging());
+    /// replica.update_object("myobject", object2.clone());
+    /// assert!(replica.has_staging());
+    /// let block_id2 = replica.commit(None).unwrap().unwrap();
+    /// assert!(!replica.has_staging());
+    /// replica.delete_object("myobject");
+    /// assert!(replica.has_staging());
+    /// ```
+    pub fn has_staging(&self) -> bool {
+        self.documents.read().unwrap().par_iter().any(|(_, rte)| rte.lock().unwrap().has_staging())
     }
 
     /// Replays a stage
@@ -1740,33 +1743,21 @@ impl Melda {
                                             .contains_key(uuid)
                                         {
                                             let mut rt = RevisionTree::new();
-                                            if rt.add(r.clone(), None) {
-                                                self.stage.write().unwrap().push(Change(
-                                                    uuid.to_string(),
-                                                    r,
-                                                    None,
-                                                ));
-                                            }
+                                            rt.add(r.clone(), None, true);
                                             self.documents
                                                 .write()
                                                 .unwrap()
-                                                .insert(uuid.to_string(), RwLock::new(rt));
+                                                .insert(uuid.to_string(), Mutex::new(rt));
                                         } else {
                                             let mut docs = self
                                                 .documents
                                                 .write()
                                                 .expect("failed_to_acquire_documents_for_writing");
                                             let rt = docs.get_mut(uuid).unwrap();
-                                            let mut rt_w = rt.write().expect(
+                                            let mut rt_w = rt.lock().expect(
                                                 "failed_to_acquire_revision_tree_for_writing",
                                             );
-                                            if rt_w.add(r.clone(), None) {
-                                                self.stage.write().unwrap().push(Change(
-                                                    uuid.to_string(),
-                                                    r,
-                                                    None,
-                                                ));
-                                            }
+                                            rt_w.add(r.clone(), None, true);
                                         }
                                     } else if record.len() == 3 {
                                         let uuid = record[0]
@@ -1794,32 +1785,21 @@ impl Melda {
                                             // This might happen if we save the stage, then reload to a previous block
                                             // were an object did not yet exist and then try to re-apply the stage
                                             let mut rt = RevisionTree::new();
-                                            self.stage.write().unwrap().push(Change(
-                                                uuid.to_string(),
-                                                r.clone(),
-                                                Some(prev.clone()),
-                                            ));
-                                            rt.add(r, Some(prev));
+                                            rt.add(r, Some(prev), true);
                                             self.documents
                                                 .write()
                                                 .unwrap()
-                                                .insert(uuid.to_string(), RwLock::new(rt));
+                                                .insert(uuid.to_string(), Mutex::new(rt));
                                         } else {
                                             let mut docs = self
                                                 .documents
                                                 .write()
                                                 .expect("failed_to_acquire_documents_for_writing");
                                             let rt = docs.get_mut(uuid).unwrap();
-                                            let mut rt_w = rt.write().expect(
+                                            let mut rt_w = rt.lock().expect(
                                                 "failed_to_acquire_revision_tree_for_writing",
                                             );
-                                            if rt_w.add(r.clone(), Some(prev.clone())) {
-                                                self.stage.write().unwrap().push(Change(
-                                                    uuid.to_string(),
-                                                    r,
-                                                    Some(prev),
-                                                ));
-                                            }
+                                            rt_w.add(r.clone(), Some(prev.clone()), true);
                                         }
                                     } else {
                                         bail!("invalid_changes_record")
@@ -1908,7 +1888,7 @@ impl Melda {
         let rt = docs.get(uuid).ok_or_else(|| anyhow!("unknown_document"))?;
         let revision = Revision::from(revision).expect("invalid_revision_string");
         let rt_r = rt
-            .read()
+            .lock()
             .expect("failed_to_acquire_revision_tree_for_reading");
         match rt_r.get_parent(&revision) {
             Some(r) => Ok(Some(r.to_string())),
@@ -2116,10 +2096,10 @@ impl Melda {
                     .expect("cannot_acquire_documents_for_writing");
                 let mut rt_w = docs_w
                     .entry(uuid.to_string())
-                    .or_insert_with(|| RwLock::new(RevisionTree::new()))
-                    .write()
+                    .or_insert_with(|| Mutex::new(RevisionTree::new()))
+                    .lock()
                     .expect("cannot_acquire_revision_tree_for_writing");
-                rt_w.add(r.clone(), prev.clone());
+                rt_w.add(r.clone(), prev.clone(), false);
             }
         };
         Ok(())

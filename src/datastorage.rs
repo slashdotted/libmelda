@@ -335,6 +335,10 @@ impl DataStorage {
         Ok(Value::from(r))
     }
 
+    pub fn has_staging(&self) -> bool {
+        !self.stage.is_empty()
+    }
+
     pub fn replay_stage(&mut self, s: &Value) -> Result<()> {
         if s.is_object() {
             let s = s.as_object().unwrap();
