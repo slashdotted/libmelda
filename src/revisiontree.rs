@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not,ls see <http://www.gnu.org/licenses/>.
 use crate::revision::Revision;
-use std::{cell::{Cell}, collections::BTreeSet, iter::FromIterator};
+use std::{cell::Cell, collections::BTreeSet, iter::FromIterator};
 use impl_tools::autoimpl;
 
 #[autoimpl(PartialEq, Eq, PartialOrd, Ord ignore self.staging)]
@@ -56,6 +56,7 @@ impl RevisionTreeEntry {
 pub struct RevisionTree {
     revisions: BTreeSet<RevisionTreeEntry>,
     staging : bool,
+    parents: BTreeSet<Revision>,
 }
 
 impl RevisionTree {
@@ -64,13 +65,17 @@ impl RevisionTree {
         RevisionTree {
             revisions: BTreeSet::<RevisionTreeEntry>::new(),
             staging: false,
+            parents: BTreeSet::<Revision>::new(),
         }
     }
 
     /// Add new revision, parent tuple
     /// This method returns true if the pair has been added, false if it already exists
     pub fn add(&mut self, revision: Revision, parent: Option<Revision>, staging: bool) -> bool {
-        if self.revisions.insert(RevisionTreeEntry::new(revision, parent, staging)) {
+        if self.revisions.insert(RevisionTreeEntry::new(revision, parent.clone(), staging)) {
+            if let Some(p) = parent {
+                self.parents.insert(p);
+            }        
             self.staging |= staging;            
             true
         } else {
@@ -84,11 +89,6 @@ impl RevisionTree {
             Some(rte) => Some(&rte.revision),
             None => None,
         }
-    }
-
-    /// Returns all revisions
-    pub fn get_all_revs(&self) -> BTreeSet<&Revision> {
-        FromIterator::from_iter(self.revisions.iter().map(|rte| &rte.revision))
     }
 
     /// Returns a reference to the internal set
@@ -126,8 +126,17 @@ impl RevisionTree {
         self.staging
     }
 
-    /// Returns leafs revisions
+    /// Returns all revisions
+    pub fn get_all_revs(&self) -> BTreeSet<&Revision> {
+        FromIterator::from_iter(self.revisions.iter().map(|rte| &rte.revision))
+    }
+
     pub fn get_leafs(&self) -> BTreeSet<&Revision> {
+        FromIterator::from_iter(self.revisions.iter().filter(|rte| !rte.revision.is_resolved() && !self.parents.contains(&rte.revision)).map(|rte| &rte.revision))
+    }
+
+    /// Returns leafs revisions
+    pub fn get_leafs2(&self) -> BTreeSet<&Revision> {
         let mut leafs = self.get_all_revs();
         self.revisions.iter().for_each(|rte| {
             if rte.revision.is_resolved() {
