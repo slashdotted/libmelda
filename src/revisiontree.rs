@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not,ls see <http://www.gnu.org/licenses/>.
 use crate::revision::Revision;
-use std::{cell::Cell, collections::{BTreeMap, BTreeSet}};
+use std::{cell::Cell, collections::{BTreeMap, HashSet}};
 use impl_tools::autoimpl;
 
 #[autoimpl(PartialEq, Eq, PartialOrd, Ord ignore self.staging)]
@@ -50,8 +50,8 @@ impl RevisionTreeEntry {
 pub struct RevisionTree {
     revisions: BTreeMap<Revision,RevisionTreeEntry>,
     staging : bool,
-    leafs: BTreeSet<Revision>, // Revisions that are not parents
-    ghost_parents: BTreeSet<Revision>, // Revisions that are parents but are not in revisions
+    leafs: HashSet<Revision>, // Revisions that are not parents
+    ghost_parents: HashSet<Revision>, // Revisions that are parents but are not in revisions
 }
 
 impl RevisionTree {
@@ -60,8 +60,8 @@ impl RevisionTree {
         RevisionTree {
             revisions: BTreeMap::<Revision,RevisionTreeEntry>::new(),
             staging: false,
-            leafs: BTreeSet::<Revision>::new(),
-            ghost_parents: BTreeSet::<Revision>::new(),
+            leafs: HashSet::<Revision>::new(),
+            ghost_parents: HashSet::<Revision>::new(),
         }
     }
 
@@ -136,7 +136,7 @@ impl RevisionTree {
     }
 
     /// Returns leafs revisions
-    pub fn get_leafs(&self) -> &BTreeSet<Revision> {
+    pub fn get_leafs(&self) -> &HashSet<Revision> {
         &self.leafs
     }
 
