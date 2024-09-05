@@ -508,18 +508,18 @@ impl Melda {
         for (uuid, rt) in self.documents.read().unwrap().iter() {
             let rt_rw  =  rt.lock().expect("cannot_acquire_revision_tree_for_commit");
             if rt_rw.has_staging() {
-                rt_rw.get_revisions().iter().for_each(|rte| {
+                rt_rw.get_revisions().iter().for_each(|(rev, rte)| {
                     if rte.is_staging() {
                         if rte.get_parent().is_none() {
                             // Creation record
-                            let tuple = vec![uuid.clone(), rte.get_revision().digest.clone()];
+                            let tuple = vec![uuid.clone(), rev.digest.clone()];
                             changes.push(Value::from(tuple));
                         } else {
                             // Update record
                             let triple = vec![
                                 uuid.clone(),
                                 rte.get_parent().as_ref().unwrap().to_string(),
-                                rte.get_revision().digest.clone(),
+                                rev.digest.clone(),
                             ];
                             changes.push(Value::from(triple));
                         }
@@ -1145,8 +1145,8 @@ impl Melda {
                 .or_insert_with(|| Mutex::new(RevisionTree::new()))
                 .lock()
                 .expect("cannot_acquire_revision_tree_for_writing");
-            for rte in other_rt_r.get_revisions() {
-                rt_w.add(rte.get_revision().clone(), rte.get_parent().clone(), rte.is_staging());
+            for (rev, rte) in other_rt_r.get_revisions() {
+                rt_w.add(rev.clone(), rte.get_parent().clone(), rte.is_staging());
             }
         }
         Ok(())
@@ -1617,18 +1617,18 @@ impl Melda {
             for (uuid, rt) in self.documents.read().unwrap().iter() {
                 let rt_rw  =  rt.lock().expect("cannot_acquire_revision_tree_for_commit");
                 if rt_rw.has_staging() {
-                    rt_rw.get_revisions().iter().for_each(|rte| {
+                    rt_rw.get_revisions().iter().for_each(|(rev, rte)| {
                         if rte.is_staging() {
                             if rte.get_parent().is_none() {
                                 // Creation record
-                                let tuple = vec![uuid.clone(), rte.get_revision().digest.clone()];
+                                let tuple = vec![uuid.clone(), rev.digest.clone()];
                                 changes.push(Value::from(tuple));
                             } else {
                                 // Update record
                                 let triple = vec![
                                     uuid.clone(),
                                     rte.get_parent().as_ref().unwrap().to_string(),
-                                    rte.get_revision().digest.clone(),
+                                    rev.digest.clone(),
                                 ];
                                 changes.push(Value::from(triple));
                             }

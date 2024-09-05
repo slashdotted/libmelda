@@ -14,21 +14,19 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not,ls see <http://www.gnu.org/licenses/>.
 use crate::revision::Revision;
-use std::{cell::Cell, collections::BTreeSet, iter::FromIterator};
+use std::{cell::Cell, collections::{BTreeMap, BTreeSet}};
 use impl_tools::autoimpl;
 
 #[autoimpl(PartialEq, Eq, PartialOrd, Ord ignore self.staging)]
 #[autoimpl(Debug, Clone)]
 pub struct RevisionTreeEntry {
-    revision : Revision,
     parent : Option<Revision>,
     staging : Cell<bool>
 }
 
 impl RevisionTreeEntry {
-    pub fn new(revision : Revision, parent : Option<Revision>, staging : bool) -> RevisionTreeEntry {
+    pub fn new(parent : Option<Revision>, staging : bool) -> RevisionTreeEntry {
         RevisionTreeEntry {
-            revision,
             parent,
             staging : Cell::new(staging)
         }
@@ -42,10 +40,6 @@ impl RevisionTreeEntry {
         self.staging.set(false);
     }
 
-    pub fn get_revision(&self) -> &Revision {
-        &self.revision
-    }
-
     pub fn get_parent(&self) -> &Option<Revision> {
         &self.parent
     }
@@ -54,27 +48,42 @@ impl RevisionTreeEntry {
 #[derive(Debug, Clone)]
 
 pub struct RevisionTree {
-    revisions: BTreeSet<RevisionTreeEntry>,
+    revisions: BTreeMap<Revision,RevisionTreeEntry>,
     staging : bool,
-    parents: BTreeSet<Revision>,
+    leafs: BTreeSet<Revision>, // Revisions that are not parents
+    ghost_parents: BTreeSet<Revision>, // Revisions that are parents but are not in revisions
 }
 
 impl RevisionTree {
     /// Constructs a new Revision Tree
     pub fn new() -> RevisionTree {
         RevisionTree {
-            revisions: BTreeSet::<RevisionTreeEntry>::new(),
+            revisions: BTreeMap::<Revision,RevisionTreeEntry>::new(),
             staging: false,
-            parents: BTreeSet::<Revision>::new(),
+            leafs: BTreeSet::<Revision>::new(),
+            ghost_parents: BTreeSet::<Revision>::new(),
         }
     }
 
     /// Add new revision, parent tuple
     /// This method returns true if the pair has been added, false if it already exists
     pub fn add(&mut self, revision: Revision, parent: Option<Revision>, staging: bool) -> bool {
-        if self.revisions.insert(RevisionTreeEntry::new(revision, parent.clone(), staging)) {
+        // Insert the new revision information
+        if self.revisions.insert(revision.clone(), RevisionTreeEntry::new(parent.clone(), staging)).is_none() {
+            // If the revision was a ghost parent it is not anymore
+            if !self.ghost_parents.remove(&revision) {
+                // The revision is not a parent, therefore it can be considered as a leaf
+                self.leafs.insert(revision);
+            }
+            // Store the parent information
             if let Some(p) = parent {
-                self.parents.insert(p);
+                // If the parent is an unknown revision, store it as ghost parent
+                if !self.revisions.contains_key(&p) {
+                    self.ghost_parents.insert(p.clone());
+                } else {
+                    // Otherwise be sure that it's not considered a leaf
+                    self.leafs.remove(&p);
+                }
             }        
             self.staging |= staging;            
             true
@@ -86,13 +95,13 @@ impl RevisionTree {
     /// Returns the winning revision
     pub fn get_winner(&self) -> Option<&Revision> {
         match self.revisions.iter().max() {
-            Some(rte) => Some(&rte.revision),
+            Some(rte) => Some(&rte.0),
             None => None,
         }
     }
 
     /// Returns a reference to the internal set
-    pub fn get_revisions(&self) -> &BTreeSet<RevisionTreeEntry> {
+    pub fn get_revisions(&self) -> &BTreeMap<Revision,RevisionTreeEntry> {
         &self.revisions
     }
 
@@ -105,7 +114,7 @@ impl RevisionTree {
     pub fn commit(&mut self) {
         if self.staging {
             self.revisions.iter().for_each(|rte| {
-                rte.commit();
+                rte.1.commit();
             });
             self.staging = false;
         }
@@ -114,7 +123,7 @@ impl RevisionTree {
     /// Abort staged changes
     pub fn unstage(&mut self) {
         if self.staging {
-            self.revisions.retain(|rte| {
+            self.revisions.retain(|_, rte| {
                 !rte.staging.get()
             });
             self.staging = false;
@@ -126,38 +135,21 @@ impl RevisionTree {
         self.staging
     }
 
-    /// Returns all revisions
-    pub fn get_all_revs(&self) -> BTreeSet<&Revision> {
-        FromIterator::from_iter(self.revisions.iter().map(|rte| &rte.revision))
-    }
-
-    pub fn get_leafs(&self) -> BTreeSet<&Revision> {
-        FromIterator::from_iter(self.revisions.iter().filter(|rte| !rte.revision.is_resolved() && !self.parents.contains(&rte.revision)).map(|rte| &rte.revision))
-    }
-
     /// Returns leafs revisions
-    pub fn get_leafs2(&self) -> BTreeSet<&Revision> {
-        let mut leafs = self.get_all_revs();
-        self.revisions.iter().for_each(|rte| {
-            if rte.revision.is_resolved() {
-                leafs.remove(&rte.revision);
-            }
-            if !rte.parent.is_none() {
-                leafs.remove(&rte.parent.as_ref().unwrap());
-            }
-        });
-        leafs
+    pub fn get_leafs(&self) -> &BTreeSet<Revision> {
+        &self.leafs
     }
 
     /// Merges from another Revision Tree
     pub fn merge(&mut self, other: &RevisionTree) {
-        self.revisions = self.revisions.union(&other.revisions).cloned().collect();
+        let mut source = other.revisions.clone();
+        self.revisions.append(&mut source);
     }
 
     /// Returns the parent of a revision
     pub fn get_parent(&self, revision: &Revision) -> Option<&Revision> {
-        self.revisions.iter().find_map(|rte| {
-            if &rte.revision == revision {
+        self.revisions.iter().find_map(|(rev,rte)| {
+            if rev == revision {
                 match &rte.parent {
                     Some(parent) => Some(parent),
                     None => None,
