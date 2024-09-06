@@ -316,13 +316,12 @@ impl Melda {
             .documents
             .write()
             .expect("cannot_acquire_documents_for_writing");
-        let mut rt_w = docs_w
+        let rt_w = docs_w
             .entry(uuid.to_string())
             .or_insert_with(|| Mutex::new(RevisionTree::new()))
-            .lock()
+            .get_mut()
             .expect("cannot_acquire_revision_tree_for_writing");
         rt_w.add(rev.clone(), None, true);
-        drop(rt_w);
         drop(docs_w);
         Ok(())
     }
@@ -354,9 +353,7 @@ impl Melda {
             .expect("cannot_acquire_documents_for_reading");
         if let Some(rt) = docs_r.get(uuid) {
             // Existing object
-            let mut rt_w = rt
-                .lock()
-                .expect("cannot_acquire_revision_tree_for_writing");
+            let mut rt_w = rt.lock().expect("cannot_acquire_revision_tree_for_writing");
             if let Some(winning_revision) = rt_w.get_winner() {
                 // If its an array descriptor first need to compute the delta
                 // If create_delta_array_descriptor returns None it means that there are
@@ -447,9 +444,7 @@ impl Melda {
             .read()
             .expect("cannot_acquire_documents_for_reading");
         if let Some(rt) = docs_r.get(uuid) {
-            let mut rt_w = rt
-                .lock()
-                .expect("cannot_acquire_revision_tree_for_writing");
+            let mut rt_w = rt.lock().expect("cannot_acquire_revision_tree_for_writing");
             if let Some(winning_revision) = rt_w.get_winner() {
                 if !winning_revision.is_deleted() && !winning_revision.is_resolved() {
                     let rev = Revision::new_deleted(winning_revision);
@@ -506,7 +501,7 @@ impl Melda {
         // Process stage
         let mut changes = Vec::<Value>::new();
         for (uuid, rt) in self.documents.read().unwrap().iter() {
-            let rt_rw  =  rt.lock().expect("cannot_acquire_revision_tree_for_commit");
+            let rt_rw = rt.lock().expect("cannot_acquire_revision_tree_for_commit");
             if rt_rw.has_staging() {
                 rt_rw.get_revisions().iter().for_each(|(rev, rte)| {
                     if rte.is_staging() {
@@ -558,7 +553,7 @@ impl Melda {
             .insert(block_hash.clone(), RwLock::new(b));
         // Commit changes
         for (_, rt) in self.documents.read().unwrap().iter() {
-            let mut rt_rw  =  rt.lock().expect("cannot_acquire_revision_tree_for_commit");
+            let mut rt_rw = rt.lock().expect("cannot_acquire_revision_tree_for_commit");
             rt_rw.commit();
         }
         Ok(Some(block_hash))
@@ -987,8 +982,16 @@ impl Melda {
             .documents
             .write()
             .expect("failed_to_acquire_documents_for_writing");
-        docs_w.par_iter_mut().for_each(|(_, rt_w)| rt_w.lock().expect("cannot_acquire_revision_tree_for_writing").unstage());
-        docs_w.retain(|_, rt| !rt.lock().expect("cannot_acquire_revision_tree_for_reading").is_empty());
+        docs_w.par_iter_mut().for_each(|(_, rt_w)| {
+            rt_w.get_mut()
+                .expect("cannot_acquire_revision_tree_for_writing")
+                .unstage()
+        });
+        docs_w.retain(|_, rt| {
+            !rt.get_mut()
+                .expect("cannot_acquire_revision_tree_for_reading")
+                .is_empty()
+        });
         Ok(())
     }
 
@@ -1029,14 +1032,13 @@ impl Melda {
                 .documents
                 .write()
                 .expect("cannot_acquire_documents_for_writing");
-            let mut rt_w = docs_w
+            let rt_w = docs_w
                 .entry(uuid.to_string())
                 .or_insert_with(|| Mutex::new(RevisionTree::new()))
-                .lock()
+                .get_mut()
                 .expect("cannot_acquire_revision_tree_for_writing");
             rt_w.merge(&rt_r);
             drop(rt_r);
-            drop(rt_w);
         }
         let mut data = self.data.write().expect("cannot_acquire_data_for_writing");
         let otherdata = &other.data.read().unwrap();
@@ -1140,10 +1142,10 @@ impl Melda {
                 .documents
                 .write()
                 .expect("cannot_get_documents_for_writing");
-            let mut rt_w = docs_w
+            let rt_w = docs_w
                 .entry(uuid.to_string())
                 .or_insert_with(|| Mutex::new(RevisionTree::new()))
-                .lock()
+                .get_mut()
                 .expect("cannot_acquire_revision_tree_for_writing");
             for (rev, rte) in other_rt_r.get_revisions() {
                 rt_w.add(rev.clone(), rte.get_parent().clone(), rte.is_staging());
@@ -1348,7 +1350,9 @@ impl Melda {
                     .expect("failed_to_acquire_revision_tree_for_reading");
                 let l = rt_r.get_leafs();
                 l.len() > 1
-            }).map(|(uuid, _)| uuid.clone()).collect()
+            })
+            .map(|(uuid, _)| uuid.clone())
+            .collect()
     }
 
     /// Returns the winning revision for the given object
@@ -1558,15 +1562,14 @@ impl Melda {
             .get_mut(uuid)
             .ok_or_else(|| anyhow!("unknown_document"))?;
         let rt_r = rt
-            .lock()
+            .get_mut()
             .expect("failed_to_acquire_revision_tree_for_reading");
         let leafs: Vec<Revision> = rt_r.get_leafs().iter().map(|r| (*r).clone()).collect();
-        drop(rt_r);
         for r in leafs {
             if r != winner {
                 let resolved = Revision::new_resolved(&r);
-                let mut rt_w = rt
-                    .lock()
+                let rt_w = rt
+                    .get_mut()
                     .expect("failed_to_acquire_revision_tree_for_writing");
                 rt_w.add(resolved.clone(), Some(r.clone()), true);
             }
@@ -1615,7 +1618,7 @@ impl Melda {
         if self.has_staging() {
             let mut changes = Vec::<Value>::new();
             for (uuid, rt) in self.documents.read().unwrap().iter() {
-                let rt_rw  =  rt.lock().expect("cannot_acquire_revision_tree_for_commit");
+                let rt_rw = rt.lock().expect("cannot_acquire_revision_tree_for_commit");
                 if rt_rw.has_staging() {
                     rt_rw.get_revisions().iter().for_each(|(rev, rte)| {
                         if rte.is_staging() {
@@ -1639,7 +1642,7 @@ impl Melda {
             r.insert(CHANGESETS_FIELD.to_string(), Value::from(changes));
         }
         if !r.is_empty() {
-            Ok(Some(Value::from(r)))    
+            Ok(Some(Value::from(r)))
         } else {
             Ok(None)
         }
@@ -1674,7 +1677,11 @@ impl Melda {
     /// assert!(replica.has_staging());
     /// ```
     pub fn has_staging(&self) -> bool {
-        self.documents.read().unwrap().par_iter().any(|(_, rte)| rte.lock().unwrap().has_staging())
+        self.documents
+            .read()
+            .unwrap()
+            .par_iter()
+            .any(|(_, rte)| rte.lock().unwrap().has_staging())
     }
 
     /// Replays a stage
@@ -1754,7 +1761,7 @@ impl Melda {
                                                 .write()
                                                 .expect("failed_to_acquire_documents_for_writing");
                                             let rt = docs.get_mut(uuid).unwrap();
-                                            let mut rt_w = rt.lock().expect(
+                                            let rt_w = rt.get_mut().expect(
                                                 "failed_to_acquire_revision_tree_for_writing",
                                             );
                                             rt_w.add(r.clone(), None, true);
@@ -1796,7 +1803,7 @@ impl Melda {
                                                 .write()
                                                 .expect("failed_to_acquire_documents_for_writing");
                                             let rt = docs.get_mut(uuid).unwrap();
-                                            let mut rt_w = rt.lock().expect(
+                                            let rt_w = rt.get_mut().expect(
                                                 "failed_to_acquire_revision_tree_for_writing",
                                             );
                                             rt_w.add(r.clone(), Some(prev.clone()), true);
@@ -2094,10 +2101,10 @@ impl Melda {
                     .documents
                     .write()
                     .expect("cannot_acquire_documents_for_writing");
-                let mut rt_w = docs_w
+                let rt_w = docs_w
                     .entry(uuid.to_string())
                     .or_insert_with(|| Mutex::new(RevisionTree::new()))
-                    .lock()
+                    .get_mut()
                     .expect("cannot_acquire_revision_tree_for_writing");
                 rt_w.add(r.clone(), prev.clone(), false);
             }
@@ -2157,8 +2164,7 @@ impl Melda {
             let base_descriptor = self.read_array_descriptor(base_revision)?;
             if base_descriptor.is_diff() {
                 // We need to resolve the diff, first determine the history
-                let mut history = vec![];
-                history.reserve(base_revision.index as usize);
+                let mut history = Vec::with_capacity(base_revision.index as usize);
                 let mut current = base_revision;
                 while let Some(new_current) = rt.get_parent(current) {
                     history.push(new_current);
