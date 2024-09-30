@@ -456,6 +456,59 @@ impl Melda {
         Ok(())
     }
 
+    /// Records the deletion of an object if it has a committed history, delete it
+    /// completely if there is no committed history
+    ///
+    /// # Arguments
+    ///
+    /// * `uuid` - The unique identifier of the object
+    ///
+    /// # Example
+    /// ```
+    /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
+    /// use std::sync::{Arc, Mutex, RwLock};
+    /// use serde_json::{Map, Value,json};
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let mut replica = Melda::new(Arc::new(RwLock::new(adapter))).expect("cannot_initialize_crdt");
+    /// let object = json!({ "somekey" : [ "somedata", 1, 2, 3, 4 ] }).as_object().unwrap().clone();
+    /// replica.create_object("myobject", object.clone());
+    /// assert!(replica.get_all_objects().contains("myobject"));    
+    /// replica.remove_object("myobject");
+    /// assert!(!replica.get_all_objects().contains("myobject"));
+    /// replica.create_object("myobject", object);
+    /// replica.commit(None);
+    /// let winner = replica.get_winner("myobject").unwrap();
+    /// let value = replica.get_value("myobject", &winner);
+    /// assert!(value.is_ok());
+    /// ```
+    pub fn remove_object(&self, uuid: &str) -> Result<()> {
+        let docs_r = self
+            .documents
+            .read()
+            .expect("cannot_acquire_documents_for_reading");
+        if let Some(rt) = docs_r.get(uuid) {
+            let mut rt_w = rt.lock().expect("cannot_acquire_revision_tree_for_writing");
+            rt_w.unstage();
+            if rt_w.is_empty() {
+                drop(rt_w);
+                drop(docs_r);
+                let mut docs_w = self
+                    .documents
+                    .write()
+                    .expect("cannot_acquire_documents_for_writing");
+                docs_w.remove(uuid);
+                return Ok(());
+            } else if let Some(winning_revision) = rt_w.get_winner() {
+                if !winning_revision.is_deleted() && !winning_revision.is_resolved() {
+                    let rev = Revision::new_deleted(winning_revision);
+                    let winning_revision = winning_revision.clone();
+                    rt_w.add(rev.clone(), Some(winning_revision.clone()), true);
+                }
+            }
+        }
+        Ok(())
+    }
+
     // TODO: Maybe we could use the same logic for commit and stage / apply_block and replay_stage
     // for in both we create or apply a block
     // in commit we need to clear the stage afterwards and we need to write the pack and the block
