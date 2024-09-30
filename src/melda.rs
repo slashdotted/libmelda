@@ -299,9 +299,14 @@ impl Melda {
     /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
     /// let mut replica = Melda::new(Arc::new(RwLock::new(adapter))).expect("cannot_initialize_crdt");
     /// let object = json!({ "somekey" : [ "somedata", 1, 2, 3, 4 ] }).as_object().unwrap().clone();
-    /// assert!(replica.create_object("myobject", object).is_ok())
+    /// let result = replica.create_object("myobject", object.clone());
+    /// assert!(result.is_ok());
+    /// assert_eq!(result.unwrap().unwrap(), "1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196");
+    /// let result = replica.create_object("myobject", object);
+    /// assert!(result.is_ok());
+    /// assert!(result.unwrap().is_none());
     /// ```
-    pub fn create_object(&self, uuid: &str, obj: Map<String, Value>) -> Result<()> {
+    pub fn create_object(&self, uuid: &str, obj: Map<String, Value>) -> Result<Option<String>> {
         // Create initial revision
         let rev = Revision::new(
             1u32,
@@ -321,9 +326,13 @@ impl Melda {
             .or_insert_with(|| Mutex::new(RevisionTree::new()))
             .get_mut()
             .expect("cannot_acquire_revision_tree_for_writing");
-        rt_w.add(rev.clone(), None, true);
-        drop(docs_w);
-        Ok(())
+        if rt_w.add(rev.clone(), None, true) {
+            drop(docs_w);
+            Ok(Some(rev.to_string()))
+        } else {
+            drop(docs_w);
+            Ok(None)
+        }
     }
 
     /// Records the update of an object
@@ -343,9 +352,15 @@ impl Melda {
     /// let object = json!({ "somekey" : [ "somedata", 1, 2, 3, 4 ] }).as_object().unwrap().clone();
     /// assert!(replica.create_object("myobject", object).is_ok());    
     /// let object = json!({ "somekey" : [ "somedata", 1, 2, 3, 4 ], "otherkey" : "otherdata" }).as_object().unwrap().clone();
-    /// assert!(replica.update_object("myobject", object).is_ok());
+    /// let result = replica.update_object("myobject", object);
+    /// assert!(result.is_ok());
+    /// assert_eq!(result.unwrap().unwrap(), "2-9e84b4db64036b29b7ad7def2efa95a11e1ffe93e6e5cf56e93b07ef8d3976ff_e5d1d20");
+    /// let object2 = json!({ "somekey" : [ "somedata", 1, 2, 3, 4 ], "otherkey" : "otherdata" }).as_object().unwrap().clone();
+    /// let result = replica.update_object("myobject2", object2);
+    /// assert!(result.is_ok());
+    /// assert_eq!(result.unwrap().unwrap(), "1-9e84b4db64036b29b7ad7def2efa95a11e1ffe93e6e5cf56e93b07ef8d3976ff");
     /// ```
-    pub fn update_object(&self, uuid: &str, obj: Map<String, Value>) -> Result<()> {
+    pub fn update_object(&self, uuid: &str, obj: Map<String, Value>) -> Result<Option<String>> {
         // Obtain the revision tree (either an existing one of a new one)
         let docs_r = self
             .documents
@@ -376,10 +391,16 @@ impl Melda {
                             self.data.write().expect("cannot_acquire_data_for_writing");
                         data_w.write_object(&rev, object).unwrap();
                         drop(data_w);
+                        Ok(Some(rev.to_string()))
+                    } else {
+                        Ok(None)
                     }
+                } else {
+                    Err(anyhow!("invalid_object"))
                 }
+            } else {
+                Err(anyhow!("object_has_no_winner"))
             }
-            Ok(())
         } else {
             // Newly created object
             drop(docs_r);
@@ -433,12 +454,17 @@ impl Melda {
     /// let readback = replica.read().unwrap();
     /// let content = serde_json::to_string(&readback).unwrap();
     /// assert_eq!("{\"_id\":\"\u{221A}\",\"somekey\u{266D}\":{\"_id\":\"1\",\"key\":\"alpha\"}}", content);
-    /// replica.delete_object("1");
+    /// let result = replica.delete_object("1");
+    /// assert!(result.is_ok());
+    /// assert_eq!(result.unwrap().unwrap(), "2-d_5423aab");
     /// let readback = replica.read().unwrap();
     /// let content = serde_json::to_string(&readback).unwrap();
     /// assert_eq!("{\"_id\":\"\u{221A}\",\"somekey\u{266D}\":null}", content);
+    /// let result2 = replica.delete_object("xxxx");
+    /// assert!(result2.is_ok());
+    /// assert!(result2.unwrap().is_none());
     /// ```
-    pub fn delete_object(&self, uuid: &str) -> Result<()> {
+    pub fn delete_object(&self, uuid: &str) -> Result<Option<String>> {
         let docs_r = self
             .documents
             .read()
@@ -450,10 +476,16 @@ impl Melda {
                     let rev = Revision::new_deleted(winning_revision);
                     let winning_revision = winning_revision.clone();
                     rt_w.add(rev.clone(), Some(winning_revision.clone()), true);
+                    Ok(Some(rev.to_string()))
+                } else {
+                    Ok(None)
                 }
+            } else {
+                Err(anyhow!("object_has_no_winner"))
             }
+        } else {
+            Ok(None)
         }
-        Ok(())
     }
 
     /// Records the deletion of an object if it has a committed history, delete it
@@ -480,8 +512,11 @@ impl Melda {
     /// let winner = replica.get_winner("myobject").unwrap();
     /// let value = replica.get_value("myobject", &winner);
     /// assert!(value.is_ok());
+    /// let result2 = replica.remove_object("xxxx");
+    /// assert!(result2.is_ok());
+    /// assert!(result2.unwrap().is_none());
     /// ```
-    pub fn remove_object(&self, uuid: &str) -> Result<()> {
+    pub fn remove_object(&self, uuid: &str) -> Result<Option<String>> {
         let docs_r = self
             .documents
             .read()
@@ -497,16 +532,22 @@ impl Melda {
                     .write()
                     .expect("cannot_acquire_documents_for_writing");
                 docs_w.remove(uuid);
-                return Ok(());
+                Ok(None)
             } else if let Some(winning_revision) = rt_w.get_winner() {
                 if !winning_revision.is_deleted() && !winning_revision.is_resolved() {
                     let rev = Revision::new_deleted(winning_revision);
                     let winning_revision = winning_revision.clone();
                     rt_w.add(rev.clone(), Some(winning_revision.clone()), true);
+                    Ok(Some(rev.to_string()))
+                } else {
+                    Ok(None)
                 }
+            } else {
+                Err(anyhow!("object_has_no_winner"))
             }
+        } else {
+            Ok(None)
         }
-        Ok(())
     }
 
     // TODO: Maybe we could use the same logic for commit and stage / apply_block and replay_stage
