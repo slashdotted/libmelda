@@ -1089,56 +1089,6 @@ impl Melda {
         Ok(())
     }
 
-    /// Merges changes from another Melda into this one (does not stage changes)
-    ///
-    /// # Arguments
-    ///
-    /// * `other` - Another Melda instance
-    ///
-    /// # Example
-    /// ```
-    /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
-    /// use std::sync::{Arc, Mutex, RwLock};
-    /// use serde_json::{Map, Value,json};
-    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
-    /// let adapter = Arc::new(RwLock::new(adapter));
-    /// let mut replica = Melda::new(adapter.clone()).expect("cannot_initialize_crdt");
-    /// let object = json!({ "somekey" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
-    /// replica.create_object("myobject", object);  
-    /// assert!(replica.get_all_objects().contains("myobject"));
-    /// let winner = replica.get_winner("myobject").unwrap();
-    /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
-    /// let block_id = replica.commit(None).unwrap().unwrap();
-    /// let adapter2 : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
-    /// let adapter2 = Arc::new(RwLock::new(adapter2));
-    /// let mut replica2 = Melda::new(adapter2.clone()).expect("cannot_initialize_crdt");
-    /// replica2.merge(&replica);
-    /// assert!(replica2.get_all_objects().contains("myobject"));
-    /// let winner = replica2.get_winner("myobject").unwrap();
-    /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
-    /// assert!(replica2.get_block(&block_id).unwrap().is_none());
-    pub fn merge(&self, other: &Melda) -> Result<()> {
-        for (uuid, rt) in other.documents.read().unwrap().iter() {
-            let rt_r = rt
-                .lock()
-                .expect("failed_to_acquire_revision_tree_for_reading");
-            let mut docs_w = self
-                .documents
-                .write()
-                .expect("cannot_acquire_documents_for_writing");
-            let rt_w = docs_w
-                .entry(uuid.to_string())
-                .or_insert_with(|| Mutex::new(RevisionTree::new()))
-                .get_mut()
-                .expect("cannot_acquire_revision_tree_for_writing");
-            rt_w.merge(&rt_r);
-            drop(rt_r);
-        }
-        let mut data = self.data.write().expect("cannot_acquire_data_for_writing");
-        let otherdata = &other.data.read().unwrap();
-        data.merge(otherdata)
-    }
-
     /// Melds another Melda into this one
     ///
     /// # Arguments
@@ -1185,73 +1135,6 @@ impl Melda {
             }
         }
         Ok(result)
-    }
-
-    /// Replicate changes from another Melda into this one
-    ///
-    /// # Arguments
-    ///
-    /// * `other` - Another Melda instance
-    ///
-    /// # Example
-    /// ```
-    /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
-    /// use std::sync::{Arc, Mutex, RwLock};
-    /// use serde_json::{Map, Value,json};
-    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
-    /// let adapter = Arc::new(RwLock::new(adapter));
-    /// let mut replica = Melda::new(adapter.clone()).expect("cannot_initialize_crdt");
-    /// let object = json!({ "somekey" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
-    /// replica.create_object("myobject", object.clone());  
-    /// assert!(replica.get_all_objects().contains("myobject"));
-    /// let winner = replica.get_winner("myobject").unwrap();
-    /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
-    /// let readback = replica.get_value("myobject", &winner).unwrap();
-    /// let block_id = replica.commit(None).unwrap().unwrap();
-    /// let adapter2 : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
-    /// let adapter2 = Arc::new(RwLock::new(adapter2));
-    /// let mut replica2 = Melda::new(adapter2.clone()).expect("cannot_initialize_crdt");
-    /// assert!(!replica2.get_all_objects().contains("myobject"));
-    /// replica2.replicate(&replica);
-    /// assert!(replica2.get_all_objects().contains("myobject"));
-    /// let winner = replica2.get_winner("myobject").unwrap();
-    /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
-    /// assert!(replica2.get_block(&block_id).unwrap().is_none());
-    /// let readback = replica2.get_value("myobject", &winner).unwrap();
-    /// let content = serde_json::to_string(&readback).unwrap();
-    /// let expected = serde_json::to_string(&object).unwrap();
-    /// assert_eq!(expected, content);
-    pub fn replicate(&self, other: &Melda) -> Result<()> {
-        let other_data = other.data.read().unwrap();
-        let other_documents = other.documents.read().unwrap();
-        if self.has_staging() {
-            bail!("stage_not_empty")
-        }
-        if other.has_staging() {
-            bail!("other_stage_not_empty")
-        }
-        self.data
-            .write()
-            .expect("cannot_get_data_for_writing")
-            .replicate(&other_data)?;
-        for (uuid, other_rt) in other_documents.iter() {
-            let other_rt_r = other_rt
-                .lock()
-                .expect("failed_to_acquire_revision_tree_for_reading");
-            let mut docs_w = self
-                .documents
-                .write()
-                .expect("cannot_get_documents_for_writing");
-            let rt_w = docs_w
-                .entry(uuid.to_string())
-                .or_insert_with(|| Mutex::new(RevisionTree::new()))
-                .get_mut()
-                .expect("cannot_acquire_revision_tree_for_writing");
-            for (rev, rte) in other_rt_r.get_revisions() {
-                rt_w.add(rev.clone(), rte.get_parent().clone(), rte.is_staging());
-            }
-        }
-        Ok(())
     }
 
     /// Reads the data structure and unflattens to a JSON object

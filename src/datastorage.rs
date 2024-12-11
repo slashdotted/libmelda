@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex, RwLock};
 pub struct DataStorage {
     adapter: Arc<RwLock<Box<dyn Adapter>>>,
     stage: HashMap<String, Value>,
-    values: HashMap<String, (String, usize, usize)>,
+    committed_objects: HashMap<String, (String, usize, usize)>,
     loaded_packs: BTreeSet<String>,
     cache: Mutex<LruCache<String, Map<String, Value>>>,
 }
@@ -45,35 +45,12 @@ impl DataStorage {
         DataStorage {
             adapter,
             stage: HashMap::<String, Value>::new(),
-            values: HashMap::<String, (String, usize, usize)>::new(),
+            committed_objects: HashMap::<String, (String, usize, usize)>::new(),
             loaded_packs: BTreeSet::new(),
             cache: Mutex::new(LruCache::<String, Map<String, Value>>::new(
                 NonZeroUsize::new(cache_size).unwrap(),
             )),
         }
-    }
-
-    /// Merges another DataStorage into this one
-    pub fn merge(&mut self, other: &DataStorage) -> Result<()> {
-        other.values.keys().for_each(|digest| {
-            if !self.values.contains_key(digest) && !self.stage.contains_key(digest) {
-                self.write_raw_value(
-                    digest,
-                    other.read_raw_value(digest).expect("failed_to_read_data"),
-                )
-                .expect("failed_to_write_data");
-            }
-        });
-        other.stage.keys().for_each(|digest| {
-            if !self.values.contains_key(digest) && !self.stage.contains_key(digest) {
-                self.write_raw_value(
-                    digest,
-                    other.read_raw_value(digest).expect("failed_to_read_data"),
-                )
-                .expect("failed_to_write_data");
-            }
-        });
-        Ok(())
     }
 
     /// Loads a pack file (and rebuilds the index)
@@ -102,7 +79,7 @@ impl DataStorage {
                 if flag == 0 {
                     let digest = digest_bytes(&data[obj_start..offset + 1]);
                     let count = offset + 1 - obj_start;
-                    self.values
+                    self.committed_objects
                         .insert(digest, (name.to_string(), obj_start, count));
                 };
             }
@@ -117,7 +94,7 @@ impl DataStorage {
             let d = v.as_array().unwrap();
             let offset = d[0].as_i64().unwrap() as usize;
             let count = d[1].as_i64().unwrap() as usize;
-            self.values
+            self.committed_objects
                 .insert(k.clone(), (index.to_string(), offset, count));
         }
         self.loaded_packs.insert(index.to_string());
@@ -148,7 +125,7 @@ impl DataStorage {
             bail!("non_empty_data_stage");
         }
         self.loaded_packs.clear();
-        self.values.clear();
+        self.committed_objects.clear();
         let pack_list = self.adapter.read().unwrap().list_objects(PACK_EXTENSION)?;
         let index_list = self.adapter.read().unwrap().list_objects(INDEX_EXTENSION)?;
         let index_set = index_list.into_iter().collect::<HashSet<_>>();
@@ -206,17 +183,6 @@ impl DataStorage {
         }
     }
 
-    pub fn replicate(&mut self, other: &DataStorage) -> Result<Vec<String>> {
-        for p in &other.loaded_packs {
-            if !self.loaded_packs.contains(p) {
-                let pack_name = p.to_string() + PACK_EXTENSION;
-                let rawdata = other.read_raw_item(&pack_name, 0, 0)?;
-                self.write_raw_item(&pack_name, &rawdata)?;
-            }
-        }
-        self.refresh()
-    }
-
     /// Writes an object associating it with the given revision (digest)
     pub fn write_object(&mut self, rev: &Revision, obj: Map<String, Value>) -> Result<()> {
         if rev.is_resolved() || rev.is_deleted() || rev.is_empty() {
@@ -260,7 +226,7 @@ impl DataStorage {
 
     /// Writes the given (JSON) value into the temporary pack (if not already there)
     pub fn write_raw_value(&mut self, digest: &str, obj: Value) -> Result<()> {
-        if !self.values.contains_key(digest) && !self.stage.contains_key(digest) {
+        if !self.committed_objects.contains_key(digest) && !self.stage.contains_key(digest) {
             self.stage.insert(digest.to_string(), obj);
         }
         Ok(())
@@ -268,7 +234,7 @@ impl DataStorage {
 
     /// Reads a JSON value given its digest
     pub fn read_raw_value(&self, digest: &str) -> Result<Value> {
-        if let Some(value) = self.values.get(digest) {
+        if let Some(value) = self.committed_objects.get(digest) {
             let (pack, offset, length) = value;
             let key = pack.clone() + PACK_EXTENSION;
             let data = self
@@ -345,7 +311,7 @@ impl DataStorage {
         if s.is_object() {
             let s = s.as_object().unwrap();
             for (digest, v) in s {
-                if !self.values.contains_key(digest) {
+                if !self.committed_objects.contains_key(digest) {
                     self.stage.insert(digest.clone(), v.clone());
                 }
             }

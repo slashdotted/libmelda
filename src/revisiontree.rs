@@ -151,12 +151,6 @@ impl RevisionTree {
         &self.leafs
     }
 
-    /// Merges from another Revision Tree
-    pub fn merge(&mut self, other: &RevisionTree) {
-        let mut source = other.revisions.clone();
-        self.revisions.append(&mut source);
-    }
-
     /// Returns the parent of a revision
     pub fn get_parent(&self, revision: &Revision) -> Option<&Revision> {
         self.revisions.iter().find_map(|(rev, rte)| {
