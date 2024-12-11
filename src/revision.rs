@@ -30,9 +30,9 @@ lazy_static! {
 
 #[derive(Debug, Clone)]
 pub struct Revision {
-    pub index: u32,
-    pub digest: String,
-    pub tail: Option<String>,
+    index: u32,
+    digest: String,
+    tail: Option<String>,
 }
 
 impl Revision {
@@ -44,6 +44,18 @@ impl Revision {
             digest: String::new(),
             tail: None,
         }
+    }
+
+    pub fn digest(&self) -> &String {
+        &self.digest
+    }
+
+    pub fn index(&self) -> u32 {
+        self.index
+    }
+
+    pub fn is_charcode(&self) -> bool {
+        self.digest.len() <= 8 && u32::from_str_radix(&self.digest, 16).is_ok()
     }
 
     /// Constructs a new revision
@@ -212,5 +224,17 @@ mod tests {
         assert!(r1 != r2);
         assert!(r1 < r2);
         assert!(r2 > r1);
+    }
+
+    #[test]
+    fn test_charcode() {
+        let r1 = crate::revision::Revision::from("1-alpha_beta").unwrap();
+        let r2 = crate::revision::Revision::from("2-1234_beta").unwrap();
+        let r3 = crate::revision::Revision::from("2-abcdef12_beta").unwrap();
+        let r4 = crate::revision::Revision::from("2-abcdef12abc_beta").unwrap();
+        assert!(!r1.is_charcode());
+        assert!(r2.is_charcode());
+        assert!(r3.is_charcode());
+        assert!(!r4.is_charcode());
     }
 }

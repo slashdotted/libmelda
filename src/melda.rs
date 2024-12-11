@@ -382,7 +382,7 @@ impl Melda {
                 // An object can be None if its an "empty" delta array descriptor
                 if let Some(object) = object {
                     let digest = digest_object(&object).unwrap(); // Digest of the current object
-                    if digest.ne(&winning_revision.digest) {
+                    if digest.ne(winning_revision.digest()) {
                         // Digest is different, there was an update
                         let rev = Revision::new_updated(digest, winning_revision);
                         let winning_revision = winning_revision.clone();
@@ -601,14 +601,14 @@ impl Melda {
                     if rte.is_staging() {
                         if rte.get_parent().is_none() {
                             // Creation record
-                            let tuple = vec![uuid.clone(), rev.digest.clone()];
+                            let tuple = vec![uuid.clone(), rev.digest().clone()];
                             changes.push(Value::from(tuple));
                         } else {
                             // Update record
                             let triple = vec![
                                 uuid.clone(),
                                 rte.get_parent().as_ref().unwrap().to_string(),
-                                rev.digest.clone(),
+                                rev.digest().clone(),
                             ];
                             changes.push(Value::from(triple));
                         }
@@ -1607,14 +1607,14 @@ impl Melda {
                         if rte.is_staging() {
                             if rte.get_parent().is_none() {
                                 // Creation record
-                                let tuple = vec![uuid.clone(), rev.digest.clone()];
+                                let tuple = vec![uuid.clone(), rev.digest().clone()];
                                 changes.push(Value::from(tuple));
                             } else {
                                 // Update record
                                 let triple = vec![
                                     uuid.clone(),
                                     rte.get_parent().as_ref().unwrap().to_string(),
-                                    rev.digest.clone(),
+                                    rev.digest().clone(),
                                 ];
                                 changes.push(Value::from(triple));
                             }
@@ -1761,7 +1761,7 @@ impl Melda {
                                             .ok_or_else(|| anyhow!("expecting_digest_string"))?;
                                         let prev = Revision::from(prev)?;
                                         let r = Revision::new(
-                                            prev.index + 1,
+                                            prev.index() + 1,
                                             digest.to_string(),
                                             Some(&prev),
                                         );
@@ -2007,8 +2007,11 @@ impl Melda {
                                     .as_str()
                                     .ok_or_else(|| anyhow!("expecting_digest_string"))?;
                                 let prev = Revision::from(prev)?;
-                                let r =
-                                    Revision::new(prev.index + 1, digest.to_string(), Some(&prev));
+                                let r = Revision::new(
+                                    prev.index() + 1,
+                                    digest.to_string(),
+                                    Some(&prev),
+                                );
                                 cs.push(Change(uuid.to_string(), r, Some(prev)));
                             } else {
                                 bail!("invalid_changes_record")
@@ -2147,7 +2150,7 @@ impl Melda {
             let base_descriptor = self.read_array_descriptor(base_revision)?;
             if base_descriptor.is_diff() {
                 // We need to resolve the diff, first determine the history
-                let mut history = Vec::with_capacity(base_revision.index as usize);
+                let mut history = Vec::with_capacity(base_revision.index() as usize);
                 let mut current = base_revision;
                 while let Some(new_current) = rt.get_parent(current) {
                     history.push(new_current);

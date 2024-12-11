@@ -185,20 +185,16 @@ impl DataStorage {
 
     /// Writes an object associating it with the given revision (digest)
     pub fn write_object(&mut self, rev: &Revision, obj: Map<String, Value>) -> Result<()> {
-        if rev.is_resolved() || rev.is_deleted() || rev.is_empty() {
+        if rev.is_resolved() || rev.is_deleted() || rev.is_empty() || rev.is_charcode() {
             Ok(())
         } else {
             // Otherwise store according to the object digest
-            if rev.digest.len() <= 8 && u32::from_str_radix(&rev.digest, 16).is_ok() {
-                Ok(())
-            } else {
-                self.write_raw_value(&rev.digest, obj.clone().into())?;
-                {
-                    let mut cache = self.cache.lock().unwrap();
-                    cache.put(rev.digest.to_string(), obj); // Only cache the full object
-                }
-                Ok(())
+            self.write_raw_value(rev.digest(), obj.clone().into())?;
+            {
+                let mut cache = self.cache.lock().unwrap();
+                cache.put(rev.digest().to_string(), obj); // Only cache the full object
             }
+            Ok(())
         }
     }
 
@@ -210,15 +206,19 @@ impl DataStorage {
         } else if revision.is_resolved() {
             // Special case, resolved object
             Ok(json!({"_resolved":true}).as_object().unwrap().clone())
-        } else if revision.digest.len() <= 8 && u32::from_str_radix(&revision.digest, 16).is_ok() {
+        } else if revision.digest().len() <= 8 && u32::from_str_radix(revision.digest(), 16).is_ok()
+        {
             // Special case, simple character
             let mut o = Map::<String, Value>::new();
-            o.insert(HASH_FIELD.to_string(), Value::from(revision.digest.clone()));
+            o.insert(
+                HASH_FIELD.to_string(),
+                Value::from(revision.digest().clone()),
+            );
             Ok(o)
-        } else if let Some(object) = self.cache.lock().unwrap().get(&revision.digest) {
+        } else if let Some(object) = self.cache.lock().unwrap().get(revision.digest()) {
             Ok(object.clone())
         } else {
-            let value = self.read_raw_value(&revision.digest)?;
+            let value = self.read_raw_value(revision.digest())?;
             let object = value.as_object().expect("expecting_an_object");
             Ok(object.clone())
         }
