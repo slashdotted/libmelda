@@ -206,8 +206,7 @@ impl DataStorage {
         } else if revision.is_resolved() {
             // Special case, resolved object
             Ok(json!({"_resolved":true}).as_object().unwrap().clone())
-        } else if revision.digest().len() <= 8 && u32::from_str_radix(revision.digest(), 16).is_ok()
-        {
+        } else if revision.is_charcode() {
             // Special case, simple character
             let mut o = Map::<String, Value>::new();
             o.insert(
