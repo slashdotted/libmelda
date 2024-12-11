@@ -1,5 +1,5 @@
 // Melda - Delta State JSON CRDT
-// Copyright (C) 2021-2022 Amos Brocco <amos.brocco@supsi.ch>
+// Copyright (C) 2021-2024 Amos Brocco <amos.brocco@supsi.ch>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -107,6 +107,7 @@ impl DataStorage {
                 };
             }
         }
+        self.loaded_packs.insert(name.to_string());
         Ok(())
     }
 
@@ -119,6 +120,7 @@ impl DataStorage {
             self.values
                 .insert(k.clone(), (index.to_string(), offset, count));
         }
+        self.loaded_packs.insert(index.to_string());
         Ok(())
     }
 
@@ -157,7 +159,6 @@ impl DataStorage {
                 } else {
                     self.load_pack(i)?;
                 }
-                self.loaded_packs.insert(i.clone());
             }
         }
         Ok(pack_list)
@@ -182,7 +183,6 @@ impl DataStorage {
                 } else {
                     self.load_pack(i)?;
                 }
-                self.loaded_packs.insert(i.clone());
                 new_packs.push(i.clone());
             }
         }
@@ -206,14 +206,15 @@ impl DataStorage {
         }
     }
 
-    pub fn replicate(&mut self, other: &DataStorage) -> Result<()> {
+    pub fn replicate(&mut self, other: &DataStorage) -> Result<Vec<String>> {
         for p in &other.loaded_packs {
             if !self.loaded_packs.contains(p) {
-                let rawdata = self.read_raw_bytes(p, 0, 0)?;
-                self.write_raw_bytes(p, &rawdata)?;
+                let pack_name = p.to_string() + PACK_EXTENSION;
+                let rawdata = other.read_raw_item(&pack_name, 0, 0)?;
+                self.write_raw_item(&pack_name, &rawdata)?;
             }
         }
-        Ok(())
+        self.refresh()
     }
 
     /// Writes an object associating it with the given revision (digest)
@@ -322,6 +323,7 @@ impl DataStorage {
             adapter.write_object(&index_key, index_map_contents.as_bytes())?;
             drop(adapter);
         }
+        // load_index_object will update loaded_packs
         self.load_index_object(&pack_digest, &index_map)?;
         self.stage.clear();
         Ok(Some(pack_digest))
@@ -353,14 +355,14 @@ impl DataStorage {
         }
     }
 
-    pub fn read_raw_bytes(&self, key: &str, offset: usize, length: usize) -> Result<Vec<u8>> {
+    pub fn read_raw_item(&self, key: &str, offset: usize, length: usize) -> Result<Vec<u8>> {
         self.adapter
             .read()
             .unwrap()
             .read_object(key, offset, length)
     }
 
-    pub fn write_raw_bytes(&mut self, key: &str, data: &[u8]) -> Result<()> {
+    pub fn write_raw_item(&mut self, key: &str, data: &[u8]) -> Result<()> {
         self.adapter.write().unwrap().write_object(key, data)
     }
 

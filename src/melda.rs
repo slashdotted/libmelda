@@ -1,5 +1,5 @@
 // Melda - Delta State JSON CRDT
-// Copyright (C) 2021-2022 Amos Brocco <amos.brocco@supsi.ch>
+// Copyright (C) 2021-2024 Amos Brocco <amos.brocco@supsi.ch>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -636,7 +636,7 @@ impl Melda {
         let blockstr = serde_json::to_string(&block).unwrap();
         let block_hash = digest_string(&blockstr);
         let blockid = block_hash.clone() + DELTA_EXTENSION;
-        data.write_raw_bytes(&blockid, blockstr.as_bytes())?;
+        data.write_raw_item(&blockid, blockstr.as_bytes())?;
         // Load the block
         drop(data);
         let mut b = self.parse_raw_block(block_hash.clone(), block).unwrap();
@@ -1179,7 +1179,7 @@ impl Melda {
             let this_items: HashSet<String> = this_items.into_iter().collect();
             for i in &other_items {
                 if !this_items.contains(i) {
-                    data.write_raw_bytes(i, other_data.read_raw_bytes(i, 0, 0)?.as_slice())?;
+                    data.write_raw_item(i, other_data.read_raw_item(i, 0, 0)?.as_slice())?;
                     result.push(i.clone());
                 }
             }
@@ -1202,19 +1202,25 @@ impl Melda {
     /// let adapter = Arc::new(RwLock::new(adapter));
     /// let mut replica = Melda::new(adapter.clone()).expect("cannot_initialize_crdt");
     /// let object = json!({ "somekey" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
-    /// replica.create_object("myobject", object);  
+    /// replica.create_object("myobject", object.clone());  
     /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner = replica.get_winner("myobject").unwrap();
     /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
+    /// let readback = replica.get_value("myobject", &winner).unwrap();
     /// let block_id = replica.commit(None).unwrap().unwrap();
     /// let adapter2 : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
     /// let adapter2 = Arc::new(RwLock::new(adapter2));
     /// let mut replica2 = Melda::new(adapter2.clone()).expect("cannot_initialize_crdt");
+    /// assert!(!replica2.get_all_objects().contains("myobject"));
     /// replica2.replicate(&replica);
     /// assert!(replica2.get_all_objects().contains("myobject"));
     /// let winner = replica2.get_winner("myobject").unwrap();
     /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
     /// assert!(replica2.get_block(&block_id).unwrap().is_none());
+    /// let readback = replica2.get_value("myobject", &winner).unwrap();
+    /// let content = serde_json::to_string(&readback).unwrap();
+    /// let expected = serde_json::to_string(&object).unwrap();
+    /// assert_eq!(expected, content);
     pub fn replicate(&self, other: &Melda) -> Result<()> {
         let other_data = other.data.read().unwrap();
         let other_documents = other.documents.read().unwrap();
@@ -2009,7 +2015,7 @@ impl Melda {
     fn fetch_raw_block(&self, blockid: &str) -> Result<Map<String, Value>> {
         let object = blockid.to_string() + DELTA_EXTENSION;
         let data = self.data.read().expect("cannot_acquire_data_for_reading");
-        let data = data.read_raw_bytes(object.as_str(), 0, 0)?;
+        let data = data.read_raw_item(object.as_str(), 0, 0)?;
         let digest = digest_bytes(data.as_slice());
         if !digest.eq(blockid) {
             bail!("mismatching_block_hash");
