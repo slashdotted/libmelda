@@ -200,7 +200,9 @@ impl DataStorage {
 
     /// Reads an object at the given revision
     pub fn read_object(&self, revision: &Revision) -> Result<Map<String, Value>> {
-        if revision.is_deleted() {
+        if revision.is_empty() {
+            Ok(json!({}).as_object().unwrap().clone())
+        } else if revision.is_deleted() {
             // Special case, deleted object
             Ok(json!({"_deleted":true}).as_object().unwrap().clone())
         } else if revision.is_resolved() {

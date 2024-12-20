@@ -370,14 +370,6 @@ mod tests {
             digest_object(json!({"alpha":1234}).as_object().unwrap()).unwrap()
                 == "54564897e73b8babc49d21c5c062987c1edd5bda9bba99ae3e4c810d0cb3afc0"
         );
-        assert!(
-            digest_object(json!({"alpha":1234}).as_object().unwrap()).unwrap()
-                == "54564897e73b8babc49d21c5c062987c1edd5bda9bba99ae3e4c810d0cb3afc0"
-        );
-        assert!(
-            digest_object(json!({"alpha": 1234}).as_object().unwrap()).unwrap()
-                == "54564897e73b8babc49d21c5c062987c1edd5bda9bba99ae3e4c810d0cb3afc0"
-        );
         assert!(digest_object(json!({}).as_object().unwrap()).unwrap() == EMPTY_HASH);
     }
 
