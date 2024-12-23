@@ -370,6 +370,14 @@ mod tests {
             digest_object(json!({"alpha":1234}).as_object().unwrap()).unwrap()
                 == "54564897e73b8babc49d21c5c062987c1edd5bda9bba99ae3e4c810d0cb3afc0"
         );
+        assert!(
+            digest_object(json!({"alpha":1234}).as_object().unwrap()).unwrap()
+                == "54564897e73b8babc49d21c5c062987c1edd5bda9bba99ae3e4c810d0cb3afc0"
+        );
+        assert!(
+            digest_object(json!({"alpha": 1234}).as_object().unwrap()).unwrap()
+                == "54564897e73b8babc49d21c5c062987c1edd5bda9bba99ae3e4c810d0cb3afc0"
+        );
         assert!(digest_object(json!({}).as_object().unwrap()).unwrap() == EMPTY_HASH);
     }
 
@@ -513,6 +521,64 @@ mod tests {
             assert!(content == r#"{"value":1.23}"#);
             let content = serde_json::to_string(&c.get("bar")).unwrap();
             assert!(content == r#"{}"#);
+        }
+    }
+
+    #[test]
+    fn test_unflatten() {
+        {
+            let mut c = HashMap::<String, Map<String, Value>>::new();
+            let v = json!({ID_FIELD: ROOT_ID, "data" : [{ID_FIELD: "foo", "value": 1.23}, {ID_FIELD: "bar"}]});
+            let path = vec![];
+            let f = flatten(&mut c, &v, &path);
+            assert!(f.is_string());
+            assert!(f.as_str().unwrap() == ROOT_ID);
+            assert!(c.len() == 1);
+            // Create map of objects with ids
+            let mut mc = HashMap::<String, Map<String, Value>>::new();
+            c.iter().for_each(|(k, v)| {
+                let mut vn = v.clone();
+                vn.insert(ID_FIELD.to_string(), serde_json::Value::String(k.clone()));
+                mc.insert(k.clone(), vn);
+            });
+            let rootobj = mc.get(ROOT_ID).unwrap().clone();
+            let obj = unflatten(&mc, &serde_json::Value::from(rootobj)).unwrap();
+            let reconstructed = serde_json::to_string(&obj).unwrap();
+            let original = serde_json::to_string(&v).unwrap();
+            assert!(reconstructed == original);
+        }
+        {
+            let mut c = HashMap::<String, Map<String, Value>>::new();
+            let v = json!({ID_FIELD : ROOT_ID, "data\u{266D}" : [{ID_FIELD: "foo", "value": 1.23}, {ID_FIELD: "bar"}]});
+            let path = vec![];
+            let f = flatten(&mut c, &v, &path);
+            assert!(f.is_string());
+            assert!(f.as_str().unwrap() == ROOT_ID);
+            assert!(c.len() == 4);
+            assert!(c.contains_key(ROOT_ID));
+            assert!(c.contains_key("foo"));
+            assert!(c.contains_key("bar"));
+            let content = serde_json::to_string(&c.get(ROOT_ID)).unwrap();
+            assert!(
+                content
+                    == r#"{"data♭":"^e13aaf01b21510d633e7e19d055f67c73f93a417d9b5a0099f76513f86dc6b00"}"#
+            );
+            let content = serde_json::to_string(&c.get("foo")).unwrap();
+            assert!(content == r#"{"value":1.23}"#);
+            let content = serde_json::to_string(&c.get("bar")).unwrap();
+            assert!(content == r#"{}"#);
+            // Create map of objects with ids
+            let mut mc = HashMap::<String, Map<String, Value>>::new();
+            c.iter().for_each(|(k, v)| {
+                let mut vn = v.clone();
+                vn.insert(ID_FIELD.to_string(), serde_json::Value::String(k.clone()));
+                mc.insert(k.clone(), vn);
+            });
+            let rootobj = mc.get(ROOT_ID).unwrap().clone();
+            let obj = unflatten(&mc, &serde_json::Value::from(rootobj)).unwrap();
+            let reconstructed = serde_json::to_string(&obj).unwrap();
+            let original = serde_json::to_string(&v).unwrap();
+            assert!(reconstructed == original);
         }
     }
 
