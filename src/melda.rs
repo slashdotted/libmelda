@@ -454,6 +454,20 @@ impl Melda {
         }
     }
 
+    fn read_object_at_revision(&self, uuid: &str, rt: &RevisionTree, rev: &Revision) -> Result<Map<String, Value>> {
+        if is_array_descriptor(uuid) {
+            let order = self.get_merged_order_at_revision(rt,rev).expect("cannot_get_merged_order");
+            Ok(ArrayDescriptor::new_from_order(order).to_json_object())
+        } else {
+            Ok(self
+                .data
+                .read()
+                .expect("cannot_acquire_data_for_reading")
+                .read_object(rev)
+                .expect("cannot_read_object"))
+        }
+    }
+
     /// Records the deletion of an object
     ///
     /// # Arguments
@@ -1543,7 +1557,8 @@ impl Melda {
             }
             // Update the winner to ensure that we do not change the view
             let data_r = self.data.read().expect("cannot_acquire_data_for_reading");
-            let merged = data_r.read_object(&winner)?;
+            //let merged = data_r.read_object(&winner)?;
+            let merged = self.read_object_at_revision(uuid, &rt_r, &winner)?;
             drop(winner);
             drop(rt_r);
             drop(data_r);
@@ -2224,6 +2239,22 @@ impl Melda {
     fn get_merged_order(&self, rt: &RevisionTree) -> Result<Vec<Value>> {
         // The base object corresponds to the revision we want to keep (winner)
         let base_revision = rt.get_winner().expect("missing_winning_revision");
+        let leafs = rt.get_leafs();
+        if leafs.len() > 1 {
+            let mut base_order = self.rebuild_array_order(base_revision, rt)?;
+            for l in leafs {
+                let leaf_order = self.rebuild_array_order(l, rt)?;
+                merge_arrays(&leaf_order, &mut base_order);
+            }
+            Ok(base_order)
+        } else {
+            self.rebuild_array_order(base_revision, rt)
+        }
+    }
+
+    // Get a merged order for the given array descriptor tree
+    fn get_merged_order_at_revision(&self, rt: &RevisionTree, base_revision: &Revision) -> Result<Vec<Value>> {
+        // The base object corresponds to the revision we want to keep (winner)
         let leafs = rt.get_leafs();
         if leafs.len() > 1 {
             let mut base_order = self.rebuild_array_order(base_revision, rt)?;

@@ -125,6 +125,43 @@ fn main() {
     let content = serde_json::to_string_pretty(&data).unwrap();
     println!("alice pulled in bob's state");
     println!("{}", content);
+
+    // Check for conflicts
+    for uuid in  melda_alice.in_conflict() {
+        println!("{} has conflicts:", uuid);
+        let winner = melda_alice.get_winner(&uuid).unwrap();
+        let conflicting = melda_alice.get_conflicting(&uuid).unwrap();
+        println!("Winner: {:?} -> {:?}", winner, melda_alice.get_value(&uuid, &winner));
+        for c in conflicting {
+            println!("Conflict {:?}", melda_alice.get_value(&uuid, &c));
+        }
+    }
+
+    // Resolve with winner
+    println!("Resolving conflicts");
+    for uuid in  melda_alice.in_conflict() {
+        let winner = melda_alice.get_winner(&uuid).unwrap();
+        melda_alice.resolve_as(&uuid, &winner).expect("Failed to resolve");
+    }
+
+    // Check for conflicts
+    for uuid in  melda_alice.in_conflict() {
+        println!("{} has conflicts:", uuid);
+        let winner = melda_alice.get_winner(&uuid).unwrap();
+        let conflicting = melda_alice.get_conflicting(&uuid).unwrap();
+        println!("Winner: {:?} -> {:?}", winner, melda_alice.get_value(&uuid, &winner));
+        for c in conflicting {
+            println!("Conflict {:?}", melda_alice.get_value(&uuid, &c));
+        }
+    }
+
+    // After resolution
+    let data = melda_alice.read().expect("Failed to read");
+
+    let content = serde_json::to_string_pretty(&data).unwrap();
+    println!("alice final state");
+    println!("{}", content);
+
 }
 
 pub fn copy_recursively(source: impl AsRef<Path>, destination: impl AsRef<Path>) -> io::Result<()> {
