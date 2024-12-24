@@ -97,7 +97,37 @@ impl ArrayDescriptor {
                 Err(anyhow!("delta_order_field_is_not_an_array"))
             }
         } else {
-            Err(anyhow!("malformed_array_descriptor"))
+            // If the object corresponds to a deleted or resolved revision generate an
+            // empty order
+            if let Some(field) = object.get("_deleted") {
+                if let Some(v) = field.as_bool() {
+                    if v {
+                        Ok(ArrayDescriptor {
+                            patch: None,
+                            order: Some(vec![]),
+                        })
+                    } else {
+                        Err(anyhow!("malformed_deleted_array_descriptor_false"))
+                    }
+                } else {
+                    Err(anyhow!("malformed_deleted_array_descriptor"))
+                }
+            } else if let Some(field) = object.get("_resolved") {
+                if let Some(v) = field.as_bool() {
+                    if v {
+                        Ok(ArrayDescriptor {
+                            patch: None,
+                            order: Some(vec![]),
+                        })
+                    } else {
+                        Err(anyhow!("malformed_resolved_array_descriptor_false"))
+                    }
+                } else {
+                    Err(anyhow!("malformed_resolved_array_descriptor"))
+                }
+            } else {
+                Err(anyhow!("malformed_array_descriptor"))
+            }
         }
     }
 
@@ -1791,8 +1821,6 @@ impl Melda {
                                             );
                                             rt_w.add(r.clone(), Some(prev.clone()), true);
                                         }
-                                    } else {
-                                        bail!("invalid_changes_record")
                                     }
                                 }
                             }
