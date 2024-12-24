@@ -439,24 +439,16 @@ impl Melda {
         }
     }
 
-    fn read_object(&self, uuid: &str, rt: &RevisionTree) -> Result<Map<String, Value>> {
-        let winner = rt.get_winner().expect("object_has_no_winner");
+    fn read_object_at_revision(
+        &self,
+        uuid: &str,
+        rt: &RevisionTree,
+        rev: &Revision,
+    ) -> Result<Map<String, Value>> {
         if is_array_descriptor(uuid) {
-            let order = self.get_merged_order(rt).expect("cannot_get_merged_order");
-            Ok(ArrayDescriptor::new_from_order(order).to_json_object())
-        } else {
-            Ok(self
-                .data
-                .read()
-                .expect("cannot_acquire_data_for_reading")
-                .read_object(winner)
-                .expect("cannot_read_object"))
-        }
-    }
-
-    fn read_object_at_revision(&self, uuid: &str, rt: &RevisionTree, rev: &Revision) -> Result<Map<String, Value>> {
-        if is_array_descriptor(uuid) {
-            let order = self.get_merged_order_at_revision(rt,rev).expect("cannot_get_merged_order");
+            let order = self
+                .get_merged_order_at_revision(rt, rev)
+                .expect("cannot_get_merged_order");
             Ok(ArrayDescriptor::new_from_order(order).to_json_object())
         } else {
             Ok(self
@@ -1269,7 +1261,7 @@ impl Melda {
                     .expect("failed_to_acquire_revision_tree_for_reading");
                 if let Some(winner) = rt_r.get_winner() {
                     if !winner.is_deleted() {
-                        let mut obj = self.read_object(uuid, &rt_r).unwrap();
+                        let mut obj = self.read_object_at_revision(uuid, &rt_r, winner).unwrap();
                         drop(rt_r);
                         obj.insert(ID_FIELD.to_string(), Value::from(uuid.clone()));
                         let mut c_w = c.lock().unwrap();
@@ -2236,24 +2228,11 @@ impl Melda {
     }
 
     // Get a merged order for the given array descriptor tree
-    fn get_merged_order(&self, rt: &RevisionTree) -> Result<Vec<Value>> {
-        // The base object corresponds to the revision we want to keep (winner)
-        let base_revision = rt.get_winner().expect("missing_winning_revision");
-        let leafs = rt.get_leafs();
-        if leafs.len() > 1 {
-            let mut base_order = self.rebuild_array_order(base_revision, rt)?;
-            for l in leafs {
-                let leaf_order = self.rebuild_array_order(l, rt)?;
-                merge_arrays(&leaf_order, &mut base_order);
-            }
-            Ok(base_order)
-        } else {
-            self.rebuild_array_order(base_revision, rt)
-        }
-    }
-
-    // Get a merged order for the given array descriptor tree
-    fn get_merged_order_at_revision(&self, rt: &RevisionTree, base_revision: &Revision) -> Result<Vec<Value>> {
+    fn get_merged_order_at_revision(
+        &self,
+        rt: &RevisionTree,
+        base_revision: &Revision,
+    ) -> Result<Vec<Value>> {
         // The base object corresponds to the revision we want to keep (winner)
         let leafs = rt.get_leafs();
         if leafs.len() > 1 {

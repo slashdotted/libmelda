@@ -127,11 +127,15 @@ fn main() {
     println!("{}", content);
 
     // Check for conflicts
-    for uuid in  melda_alice.in_conflict() {
+    for uuid in melda_alice.in_conflict() {
         println!("{} has conflicts:", uuid);
         let winner = melda_alice.get_winner(&uuid).unwrap();
         let conflicting = melda_alice.get_conflicting(&uuid).unwrap();
-        println!("Winner: {:?} -> {:?}", winner, melda_alice.get_value(&uuid, &winner));
+        println!(
+            "Winner: {:?} -> {:?}",
+            winner,
+            melda_alice.get_value(&uuid, &winner)
+        );
         for c in conflicting {
             println!("Conflict {:?}", melda_alice.get_value(&uuid, &c));
         }
@@ -139,17 +143,23 @@ fn main() {
 
     // Resolve with winner
     println!("Resolving conflicts");
-    for uuid in  melda_alice.in_conflict() {
+    for uuid in melda_alice.in_conflict() {
         let winner = melda_alice.get_winner(&uuid).unwrap();
-        melda_alice.resolve_as(&uuid, &winner).expect("Failed to resolve");
+        melda_alice
+            .resolve_as(&uuid, &winner)
+            .expect("Failed to resolve");
     }
 
     // Check for conflicts
-    for uuid in  melda_alice.in_conflict() {
+    for uuid in melda_alice.in_conflict() {
         println!("{} has conflicts:", uuid);
         let winner = melda_alice.get_winner(&uuid).unwrap();
         let conflicting = melda_alice.get_conflicting(&uuid).unwrap();
-        println!("Winner: {:?} -> {:?}", winner, melda_alice.get_value(&uuid, &winner));
+        println!(
+            "Winner: {:?} -> {:?}",
+            winner,
+            melda_alice.get_value(&uuid, &winner)
+        );
         for c in conflicting {
             println!("Conflict {:?}", melda_alice.get_value(&uuid, &c));
         }
@@ -161,7 +171,6 @@ fn main() {
     let content = serde_json::to_string_pretty(&data).unwrap();
     println!("alice final state");
     println!("{}", content);
-
 }
 
 pub fn copy_recursively(source: impl AsRef<Path>, destination: impl AsRef<Path>) -> io::Result<()> {
