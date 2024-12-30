@@ -381,9 +381,9 @@ When we meld two replicas that had some concurrent updates it is likely that con
 for uuid in  m.in_conflict() {
 	let winner = m.get_winner(&uuid).unwrap();
 	let conflicting = m.get_conflicting(&uuid).unwrap();
-	println!("Winner: {:?} -> {:?}", winner, m.get_value(&uuid, &winner));
+	println!("Winner: {:?} -> {:?}", winner, m.get_value(&uuid, Some(&winner)));
 	for c in conflicting {
-	    println!("Conflict {:?}", m.get_value(&uuid, &c));
+	    println!("Conflict {:?}", m.get_value(&uuid, Some(&c)));
 	}
 }
 ```

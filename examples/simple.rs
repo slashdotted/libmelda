@@ -134,10 +134,10 @@ fn main() {
         println!(
             "Winner: {:?} -> {:?}",
             winner,
-            melda_alice.get_value(&uuid, &winner)
+            melda_alice.get_value(&uuid, Some(&winner))
         );
         for c in conflicting {
-            println!("Conflict {:?}", melda_alice.get_value(&uuid, &c));
+            println!("Conflict {:?}", melda_alice.get_value(&uuid, Some(&c)));
         }
     }
 
@@ -158,10 +158,10 @@ fn main() {
         println!(
             "Winner: {:?} -> {:?}",
             winner,
-            melda_alice.get_value(&uuid, &winner)
+            melda_alice.get_value(&uuid, Some(&winner))
         );
         for c in conflicting {
-            println!("Conflict {:?}", melda_alice.get_value(&uuid, &c));
+            println!("Conflict {:?}", melda_alice.get_value(&uuid, Some(&c)));
         }
     }
 

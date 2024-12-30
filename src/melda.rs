@@ -262,7 +262,7 @@ impl Melda {
     /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner = replica.get_winner("myobject").unwrap();
     /// assert_eq!("2-d_e5d1d20", winner);
-    /// let value = replica.get_value("myobject", &winner);
+    /// let value = replica.get_value("myobject", Some(&winner));
     /// assert!(value.is_ok());
     /// assert!(value.unwrap().contains_key("_deleted"));
     /// let info = json!({ "author" : "Some user", "date" : "2022-05-23 13:47:00CET" }).as_object().unwrap().clone();
@@ -479,7 +479,7 @@ impl Melda {
     /// replica.delete_object("myobject");
     /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner = replica.get_winner("myobject").unwrap();
-    /// let value = replica.get_value("myobject", &winner);
+    /// let value = replica.get_value("myobject", Some(&winner));
     /// assert!(value.is_ok());
     /// assert!(value.unwrap().contains_key("_deleted"));
     /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
@@ -546,7 +546,7 @@ impl Melda {
     /// replica.create_object("myobject", object);
     /// replica.commit(None);
     /// let winner = replica.get_winner("myobject").unwrap();
-    /// let value = replica.get_value("myobject", &winner);
+    /// let value = replica.get_value("myobject", Some(&winner));
     /// assert!(value.is_ok());
     /// let result2 = replica.remove_object("xxxx");
     /// assert!(result2.is_ok());
@@ -611,7 +611,7 @@ impl Melda {
     /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner = replica.get_winner("myobject").unwrap();
     /// assert_eq!("2-d_e5d1d20", winner);
-    /// let value = replica.get_value("myobject", &winner);
+    /// let value = replica.get_value("myobject", Some(&winner));
     /// assert!(value.is_ok());
     /// assert!(value.unwrap().contains_key("_deleted"));
     /// let info = json!({ "author" : "Some user", "date" : "2022-05-23 13:47:00CET" }).as_object().unwrap().clone();
@@ -619,7 +619,7 @@ impl Melda {
     /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner2 = replica.get_winner("myobject").unwrap();
     /// assert_eq!("2-d_e5d1d20", winner2);
-    /// let value2 = replica.get_value("myobject", &winner);
+    /// let value2 = replica.get_value("myobject", Some(&winner));
     /// assert!(value2.is_ok());
     /// assert!(value2.unwrap().contains_key("_deleted"));
     /// ```
@@ -732,23 +732,57 @@ impl Melda {
     /// let object = json!({ "somekey" : [ "somedata", 1.0f32, 2.0f32, 3.0f32, 4.0f32 ] }).as_object().unwrap().clone();
     /// replica.create_object("myobject", object.clone());
     /// let winner = replica.get_winner("myobject").unwrap();
-    /// let value = replica.get_value("myobject", &winner).unwrap();
+    /// let value = replica.get_value("myobject", Some(&winner)).unwrap();
+    /// assert_eq!(value, object);
+    /// let value = replica.get_value("myobject", None).unwrap();
     /// assert_eq!(value, object);
     /// ```
-    pub fn get_value(&self, uuid: &str, revision: &str) -> Result<Map<String, Value>> {
-        let revision = Revision::from(revision).expect("invalid_revision_string");
-        match self
-            .documents
-            .read()
-            .expect("failed_to_acquire_documents_for_reading")
-            .get(uuid)
-        {
-            Some(_) => self
-                .data
-                .read()
-                .expect("cannot_acquire_data_for_reading")
-                .read_object(&revision),
-            None => Err(anyhow!("invalid object uuid")),
+    pub fn get_value(&self, uuid: &str, revision: Option<&str>) -> Result<Map<String, Value>> {
+        match revision {
+            Some(revision) => {
+                let revision = Revision::from(revision).expect("invalid_revision_string");
+                match self
+                    .documents
+                    .read()
+                    .expect("failed_to_acquire_documents_for_reading")
+                    .get(uuid)
+                {
+                    Some(rt) => {
+                        let rt_r = rt
+                            .lock()
+                            .expect("failed_to_acquire_revision_tree_for_reading");
+                        if !rt_r.get_revisions().contains_key(&revision) {
+                            Err(anyhow!("invalid object revision"))
+                        } else {
+                            self.data
+                                .read()
+                                .expect("cannot_acquire_data_for_reading")
+                                .read_object(&revision)
+                        }
+                    }
+                    None => Err(anyhow!("invalid object uuid")),
+                }
+            }
+            None => {
+                match self
+                    .documents
+                    .read()
+                    .expect("failed_to_acquire_documents_for_reading")
+                    .get(uuid)
+                {
+                    Some(rt) => {
+                        let rt_r = rt
+                            .lock()
+                            .expect("failed_to_acquire_revision_tree_for_reading");
+                        let revision = rt_r.get_winner().expect("object_has_no_winner");
+                        self.data
+                            .read()
+                            .expect("cannot_acquire_data_for_reading")
+                            .read_object(revision)
+                    }
+                    None => Err(anyhow!("invalid object uuid")),
+                }
+            }
         }
     }
 
@@ -987,7 +1021,7 @@ impl Melda {
     /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner = replica.get_winner("myobject").unwrap();
     /// assert_eq!("2-d_e5d1d20", winner);
-    /// let value = replica.get_value("myobject", &winner);
+    /// let value = replica.get_value("myobject", Some(&winner));
     /// assert!(value.is_ok());
     /// assert!(value.unwrap().contains_key("_deleted"));
     /// let info = json!({ "author" : "Some user", "date" : "2022-05-23 13:47:00CET" }).as_object().unwrap().clone();
@@ -1096,7 +1130,7 @@ impl Melda {
     /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner = replica.get_winner("myobject").unwrap();
     /// assert_eq!("2-d_e5d1d20", winner);
-    /// let value = replica.get_value("myobject", &winner);
+    /// let value = replica.get_value("myobject", Some(&winner));
     /// assert!(value.is_ok());
     /// assert!(value.unwrap().contains_key("_deleted"));
     /// replica.unstage();
@@ -1398,7 +1432,7 @@ impl Melda {
     /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner = replica.get_winner("myobject").unwrap();
     /// assert_eq!("2-d_e5d1d20", winner);
-    /// let value = replica.get_value("myobject", &winner);
+    /// let value = replica.get_value("myobject", Some(&winner));
     /// assert!(value.is_ok());
     /// assert!(value.unwrap().contains_key("_deleted"));
     /// replica.unstage();
@@ -1617,7 +1651,7 @@ impl Melda {
     /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner = replica.get_winner("myobject").unwrap();
     /// assert_eq!("2-d_e5d1d20", winner);
-    /// let value = replica.get_value("myobject", &winner);
+    /// let value = replica.get_value("myobject", Some(&winner));
     /// assert!(value.is_ok());
     /// assert!(value.unwrap().contains_key("_deleted"));
     /// let stage = replica.stage().unwrap();
@@ -1728,7 +1762,7 @@ impl Melda {
     /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner = replica.get_winner("myobject").unwrap();
     /// assert_eq!("2-d_e5d1d20", winner);
-    /// let value = replica.get_value("myobject", &winner);
+    /// let value = replica.get_value("myobject", Some(&winner));
     /// assert!(value.is_ok());
     /// assert!(value.unwrap().contains_key("_deleted"));
     /// let stage = replica.stage().unwrap();
