@@ -1040,6 +1040,9 @@ impl Melda {
     /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
     /// ```
     pub fn reload_until(&self, anchors: &BTreeSet<String>) -> Result<()> {
+        if anchors.is_empty() {
+            return self.reload();
+        }
         // Ensure that the stage is empty
         if self.has_staging() {
             bail!("stage_not_empty")
