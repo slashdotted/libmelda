@@ -637,9 +637,22 @@ impl Melda {
         &self,
         information: Option<Map<String, Value>>,
     ) -> Result<Option<BTreeSet<String>>> {
-        // TODO: Fix logic
+        // Automatically resolve conflicts in array_descriptors
+        for (uuid, rt) in self.documents.read().unwrap().iter() {
+            if is_array_descriptor(uuid) {
+                let rt_r = rt.lock().expect("cannot_acquire_revision_tree_for_commit");
+                let w = rt_r.get_winner().ok_or_else(|| anyhow!("no_winner"))?;
+                let l = rt_r.get_leafs();
+                if l.len() > 1 {
+                    self.resolve_as(uuid, w.to_string().as_str())
+                        .expect("cannot_automatically_resolve_array_descriptor_conflict");
+                }
+            }
+        }
+        // Commit data packs
         let mut block = Map::<String, Value>::new();
-        let mut data = self.data.write().expect("cannot_acquire_data_for_writing");
+        let mut data: std::sync::RwLockWriteGuard<'_, DataStorage> =
+            self.data.write().expect("cannot_acquire_data_for_writing");
         let _packid = data.pack()?;
         // Process stage
         let mut changes = Vec::<Value>::new();
