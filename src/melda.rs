@@ -935,6 +935,10 @@ impl Melda {
     /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
     /// ```    
     pub fn refresh(&mut self) -> Result<()> {
+        // Check that stage is empty, otherwise fail (user must unstage explicity if necessary)
+        if self.has_staging() {
+            bail!("stage_not_empty")
+        }
         // 1. Get new list of blocks
         let data_r = self.data.read().expect("cannot_acquire_data_for_writing");
         let list_str = data_r.list_raw_items(DELTA_EXTENSION)?;
@@ -1406,7 +1410,8 @@ impl Melda {
     /// let adapter2 = Arc::new(RwLock::new(adapter2));
     /// let mut replica2 = Melda::new(adapter2.clone()).expect("cannot_initialize_crdt");
     /// let object = json!({ "another" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
-    /// replica2.create_object("myobject", object);  
+    /// replica2.create_object("myobject", object);
+    /// let anchors2 = replica2.commit(None).unwrap().unwrap();
     /// replica2.meld(&replica);
     /// replica2.refresh();
     /// let conflicting = replica2.in_conflict();
@@ -1498,13 +1503,14 @@ impl Melda {
     /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner = replica.get_winner("myobject").unwrap();
     /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
-    /// let block_id = replica.commit(None).unwrap().unwrap();
+    /// let anchors = replica.commit(None).unwrap().unwrap();
     /// let adapter2 : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
     /// let adapter2 = Arc::new(RwLock::new(adapter2));
     /// let mut replica2 = Melda::new(adapter2.clone()).expect("cannot_initialize_crdt");
     /// let object = json!({ "another" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
     /// replica2.create_object("myobject", object);
     /// let winner2 = replica2.get_winner("myobject").unwrap();
+    /// let anchors2 = replica2.commit(None).unwrap().unwrap();
     /// replica2.meld(&replica);
     /// replica2.refresh();
     /// let conflicting = replica2.in_conflict();
@@ -1564,6 +1570,7 @@ impl Melda {
     /// replica2.create_object("myobject", object);
     /// let winner2 = replica2.get_winner("myobject").unwrap();
     /// assert_eq!("1-255cc6219e48f526c04bc5af86439c34e4fe39fcdc611758ff833a2ff80583f0", winner2);
+    /// let anchors2 = replica2.commit(None).unwrap().unwrap();
     /// replica2.meld(&replica);
     /// replica2.refresh();
     /// let conflicting = replica2.in_conflict();
