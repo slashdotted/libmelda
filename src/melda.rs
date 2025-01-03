@@ -1179,7 +1179,7 @@ impl Melda {
         Ok(())
     }
 
-    /// Melds another Melda into this one
+    /// Melds another Melda into this one. Only committed items (delta blocks and data packs) are melded.
     ///
     /// # Arguments
     ///
