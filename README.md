@@ -173,7 +173,7 @@ let info = json!({ "author" : "Alice", "description" : "First commit" })
 	.clone();
 let commit_result = m.commit(Some(info));
 ```
-The result of the **commit** is either an error, **None** if there were no changes to be committed or **Some(String)** if changes were committed: the string is the commit identifier.
+The result of the **commit** is either an error, **None** if there were no changes to be committed or **Some(BTreeSet<String>)** if changes were committed: the set contains the identifier of the committed block.
 Upon success, on disk (in the **todolist** directory) the following content should have been created:
 ```
 todolist/
@@ -361,7 +361,8 @@ It is possible to navigate through commits by means of the **reload_until** meth
             break;
         }
     }
-    m.reload_until(block_id.as_ref().unwrap())
+    let anchors = BTreeSet::from([block_id.unwrap()]);
+    m.reload_until(&anchors)
         .expect("Failed to reload until origin");
 ```
 

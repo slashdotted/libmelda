@@ -257,7 +257,7 @@ impl Melda {
     /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner = replica.get_winner("myobject").unwrap();
     /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
-    /// let block_id = replica.commit(None).unwrap().unwrap();
+    /// let committed_anchors = replica.commit(None).unwrap().unwrap();
     /// replica.delete_object("myobject");
     /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner = replica.get_winner("myobject").unwrap();
@@ -267,11 +267,14 @@ impl Melda {
     /// assert!(value.unwrap().contains_key("_deleted"));
     /// let info = json!({ "author" : "Some user", "date" : "2022-05-23 13:47:00CET" }).as_object().unwrap().clone();
     /// replica.commit(Some(info));
-    /// let mut replica = Melda::new_until(adapter, &block_id).expect("cannot_initialize_crdt");
+    /// let mut replica = Melda::new_until(adapter, &committed_anchors).expect("cannot_initialize_crdt");
     /// let winner = replica.get_winner("myobject").unwrap();
     /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
     /// ```
-    pub fn new_until(adapter: Arc<RwLock<Box<dyn Adapter>>>, block: &str) -> Result<Melda> {
+    pub fn new_until(
+        adapter: Arc<RwLock<Box<dyn Adapter>>>,
+        anchors: &BTreeSet<String>,
+    ) -> Result<Melda> {
         let cache_size = std::env::var("MELDA_ARRAYDESCRIPTORS_CACHE_CAP")
             .unwrap_or_else(|_| "16".to_string())
             .parse::<u32>()
@@ -284,7 +287,7 @@ impl Melda {
                 NonZeroUsize::new(cache_size).unwrap(),
             )),
         };
-        dc.reload_until(block)?;
+        dc.reload_until(anchors)?;
         Ok(dc)
     }
 
@@ -296,7 +299,7 @@ impl Melda {
     /// * `block` - Block identifier
     ///
     /// ```
-    pub fn new_from_url_until(url: &str, block: &str) -> Result<Melda> {
+    pub fn new_from_url_until(url: &str, anchors: &BTreeSet<String>) -> Result<Melda> {
         let cache_size = std::env::var("MELDA_ARRAYDESCRIPTORS_CACHE_CAP")
             .unwrap_or_else(|_| "16".to_string())
             .parse::<u32>()
@@ -310,7 +313,7 @@ impl Melda {
                 NonZeroUsize::new(cache_size).unwrap(),
             )),
         };
-        dc.reload_until(block)?;
+        dc.reload_until(anchors)?;
         Ok(dc)
     }
 
@@ -590,7 +593,8 @@ impl Melda {
     // for in both we create or apply a block
     // in commit we need to clear the stage afterwards and we need to write the pack and the block
 
-    /// Commits changes to the backend adapter
+    /// Commits changes to the backend adapter and returns the set of anchors (containing the identifier
+    /// of the committed block)
     ///
     /// # Arguments
     ///
@@ -623,7 +627,10 @@ impl Melda {
     /// assert!(value2.is_ok());
     /// assert!(value2.unwrap().contains_key("_deleted"));
     /// ```
-    pub fn commit(&self, information: Option<Map<String, Value>>) -> Result<Option<String>> {
+    pub fn commit(
+        &self,
+        information: Option<Map<String, Value>>,
+    ) -> Result<Option<BTreeSet<String>>> {
         // TODO: Fix logic
         let mut block = Map::<String, Value>::new();
         let mut data = self.data.write().expect("cannot_acquire_data_for_writing");
@@ -686,7 +693,8 @@ impl Melda {
             let mut rt_rw = rt.lock().expect("cannot_acquire_revision_tree_for_commit");
             rt_rw.commit();
         }
-        Ok(Some(block_hash))
+        let anchors = BTreeSet::from([block_hash]);
+        Ok(Some(anchors))
     }
 
     /// Returns a set of the identifier of all objects
@@ -799,10 +807,11 @@ impl Melda {
     /// replica.create_object("myobject", object);
     /// let anchors = replica.get_anchors();
     /// assert!(anchors.is_empty());
-    /// let block = replica.commit(None).unwrap().unwrap();
+    /// let committed_anchors = replica.commit(None).unwrap().unwrap();
     /// let anchors = replica.get_anchors();
+    /// assert!(committed_anchors.len() == 1);
     /// assert!(anchors.len() == 1);
-    /// assert!(anchors.contains(&block));
+    /// assert!(anchors == committed_anchors);
     /// ```
     pub fn get_anchors(&self) -> BTreeSet<String> {
         let blocks_r = self.blocks.read().unwrap();
@@ -841,10 +850,10 @@ impl Melda {
     /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner = replica.get_winner("myobject").unwrap();
     /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
-    /// let block = replica.commit(None).unwrap().unwrap();
+    /// let committed_anchors = replica.commit(None).unwrap().unwrap();
     /// let anchors = replica.get_anchors();
     /// assert!(anchors.len() == 1);
-    /// assert!(anchors.contains(&block));
+    /// assert!(anchors == committed_anchors);
     /// replica.reload();
     /// let winner = replica.get_winner("myobject").unwrap();
     /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
@@ -917,10 +926,10 @@ impl Melda {
     /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner = replica.get_winner("myobject").unwrap();
     /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
-    /// let block = replica.commit(None).unwrap().unwrap();
+    /// let committed_anchors = replica.commit(None).unwrap().unwrap();
     /// let anchors = replica.get_anchors();
     /// assert!(anchors.len() == 1);
-    /// assert!(anchors.contains(&block));
+    /// assert!(anchors == committed_anchors);
     /// replica.refresh();
     /// let winner = replica.get_winner("myobject").unwrap();
     /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
@@ -1016,7 +1025,7 @@ impl Melda {
     /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner = replica.get_winner("myobject").unwrap();
     /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
-    /// let block_id = replica.commit(None).unwrap().unwrap();
+    /// let committed_anchors = replica.commit(None).unwrap().unwrap();
     /// replica.delete_object("myobject");
     /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner = replica.get_winner("myobject").unwrap();
@@ -1026,11 +1035,11 @@ impl Melda {
     /// assert!(value.unwrap().contains_key("_deleted"));
     /// let info = json!({ "author" : "Some user", "date" : "2022-05-23 13:47:00CET" }).as_object().unwrap().clone();
     /// replica.commit(Some(info));
-    /// replica.reload_until(&block_id);
+    /// replica.reload_until(&committed_anchors);
     /// let winner = replica.get_winner("myobject").unwrap();
     /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
     /// ```
-    pub fn reload_until(&self, block_id: &str) -> Result<()> {
+    pub fn reload_until(&self, anchors: &BTreeSet<String>) -> Result<()> {
         // Ensure that the stage is empty
         if self.has_staging() {
             bail!("stage_not_empty")
@@ -1069,24 +1078,28 @@ impl Melda {
         drop(blocks_w);
         // Mark valid blocks
         self.mark_valid_blocks();
-        // Check if block is valid
+        // Check if blocks are valid
         let blocks_r = self
             .blocks
             .read()
             .expect("cannot_acquire_blocks_for_reading");
-        if !blocks_r.contains_key(block_id) {
-            bail!(
-                "reload_until_interrupted_block_not_found: {} {:?}",
-                block_id,
-                blocks_r.keys()
-            );
-        }
-        if blocks_r.get(block_id).unwrap().read().unwrap().status != Status::Valid {
-            bail!("reload_until_interrupted_invalid_block: {}", block_id);
+        for block_id in anchors {
+            if !blocks_r.contains_key(block_id) {
+                bail!(
+                    "reload_until_interrupted_block_not_found: {} {:?}",
+                    block_id,
+                    blocks_r.keys()
+                );
+            }
+            if blocks_r.get(block_id).unwrap().read().unwrap().status != Status::Valid {
+                bail!("reload_until_interrupted_invalid_block: {}", block_id);
+            }
         }
         // Apply block and parents
         let mut to_apply = VecDeque::new();
-        to_apply.push_back(block_id.to_string());
+        for block_id in anchors {
+            to_apply.push_back(block_id.to_string());
+        }
         while !to_apply.is_empty() {
             let bid = to_apply.pop_front().unwrap();
             let block_item = blocks_r.get(&bid).unwrap();
@@ -1178,7 +1191,7 @@ impl Melda {
     /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner = replica.get_winner("myobject").unwrap();
     /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
-    /// let block_id = replica.commit(None).unwrap().unwrap();
+    /// let committed_anchors = replica.commit(None).unwrap().unwrap();
     /// let adapter2 : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
     /// let adapter2 = Arc::new(RwLock::new(adapter2));
     /// let mut replica2 = Melda::new(adapter2.clone()).expect("cannot_initialize_crdt");
@@ -1187,8 +1200,11 @@ impl Melda {
     /// assert!(replica2.get_all_objects().contains("myobject"));
     /// let winner = replica2.get_winner("myobject").unwrap();
     /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
-    /// let block = replica2.get_block(&block_id).unwrap().unwrap();
-    /// assert_eq!(block_id, block.id);
+    /// let block_id = committed_anchors.first().unwrap();
+    /// let block2 = replica2.get_block(&block_id).unwrap().unwrap();
+    /// let block = replica.get_block(&block_id).unwrap().unwrap();
+    /// assert_eq!(block_id, &block.id);
+    //// assert_eq!(block_id, &block2.id);
     pub fn meld(&self, other: &Melda) -> Result<Vec<String>> {
         let mut result = vec![];
         let other_data = other.data.read().unwrap();
@@ -1896,9 +1912,10 @@ impl Melda {
     /// let winner = replica.get_winner("myobject").unwrap();
     /// let parent = replica.get_parent_revision("myobject", &winner).unwrap();
     /// assert!(parent.is_none());
-    /// let block_id = replica.commit(None).unwrap().unwrap();
+    /// let committed_anchors = replica.commit(None).unwrap().unwrap();
+    /// let block_id = committed_anchors.first().unwrap();
     /// let block = replica.get_block(&block_id).unwrap().unwrap();
-    /// assert_eq!(block_id, block.id);
+    /// assert_eq!(block_id, &block.id);
     pub fn get_block(&self, block_id: &str) -> Result<Option<Block>> {
         let blocks_r = self
             .blocks
