@@ -237,6 +237,12 @@ impl Melda {
         Ok(dc)
     }
 
+    /// Returns the underlying storage adapter
+    pub fn get_adapter(&self) -> Arc<RwLock<Box<dyn Adapter>>> {
+        let data = self.data.read().expect("cannot_acquire_data_for_reading");
+        data.get_adapter()
+    }
+
     /// Initializes a new Melda data structure using the provided adapter and loads until the given block
     ///
     /// # Arguments

@@ -336,4 +336,9 @@ impl DataStorage {
     pub fn list_raw_items(&self, ext: &str) -> Result<Vec<String>> {
         self.adapter.read().unwrap().list_objects(ext)
     }
+
+    /// Returns the underlying storage adapter
+    pub fn get_adapter(&self) -> Arc<RwLock<Box<dyn Adapter>>> {
+        self.adapter.clone()
+    }
 }
