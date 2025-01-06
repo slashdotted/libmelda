@@ -2001,6 +2001,75 @@ impl Melda {
         }
     }
 
+    /// Stages a full snapshot for array descriptors
+    ///
+    /// # Example
+    /// ```
+    /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
+    /// use std::sync::{Arc, Mutex, RwLock};
+    /// use serde_json::{Map, Value,json};
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let adapter = Arc::new(RwLock::new(adapter));
+    /// let replica = Melda::new(adapter.clone()).expect("cannot_initialize_crdt");
+    /// let object = json!({ "somekey\u{266D}" : [ { "_id" : "somedata", "value" : 1u32 }, { "_id" : "otherdata", "value" : 2u32 } ] }).as_object().unwrap().clone();
+    /// replica.update(object).unwrap();
+    /// replica.commit(None).unwrap();
+    /// assert!(!replica.has_staging());
+    /// replica.stage_full_snapshot().unwrap();
+    /// assert!(!replica.has_staging());
+    /// let object = json!({ "somekey\u{266D}" : [ { "_id" : "somedata2", "value" : 1u32 }, { "_id" : "otherdata", "value" : 2u32 } ] }).as_object().unwrap().clone();
+    /// replica.update(object).unwrap();
+    /// replica.commit(None).unwrap();
+    /// assert!(!replica.has_staging());
+    /// replica.stage_full_snapshot().unwrap();
+    /// assert!(replica.has_staging());
+    /// let stage = replica.stage().unwrap();
+    /// let content = serde_json::to_string(&stage).unwrap();
+    /// assert_eq!(content,"{\"c\":[[\"^5dce0c82036c35bb319c8e5085004949a604475936bb5a9bb124a95fd793aa6c\",\"2-97b7a6993ee290384d32087608174bbab48de824406166f8b78c24a3bf1e1a1c_986c918\",\"bdb1432c17447b65ac69463ecbc9cde3b8945388dac19a52eb3a7c0c0d5ce7f8\"]],\"o\":{\"bdb1432c17447b65ac69463ecbc9cde3b8945388dac19a52eb3a7c0c0d5ce7f8\":{\"A\":[\"somedata2\",\"otherdata\"]}}}");
+    /// replica.commit(None).unwrap();
+    /// assert!(!replica.has_staging());
+    /// replica.stage_full_snapshot().unwrap();
+    /// assert!(!replica.has_staging());
+    /// let readback = replica.read().unwrap();
+    /// let content = serde_json::to_string(&readback).unwrap();
+    /// assert_eq!("{\"_id\":\"\u{221A}\",\"somekey\u{266D}\":[{\"_id\":\"somedata2\",\"value\":1},{\"_id\":\"otherdata\",\"value\":2}]}", content);
+    /// let object = json!({ "somekey\u{266D}" : [ { "_id" : "somedata2", "value" : 1u32 }, { "_id" : "otherdata2", "value" : 3u32 } ] }).as_object().unwrap().clone();
+    /// replica.update(object).unwrap();
+    /// let readback = replica.read().unwrap();
+    /// let content = serde_json::to_string(&readback).unwrap();
+    /// assert_eq!("{\"_id\":\"\u{221A}\",\"somekey\u{266D}\":[{\"_id\":\"somedata2\",\"value\":1},{\"_id\":\"otherdata2\",\"value\":3}]}", content);
+    pub fn stage_full_snapshot(&self) -> Result<()> {
+        for (uuid, rt) in self.documents.read().unwrap().iter() {
+            if is_array_descriptor(uuid) {
+                let mut rt_w = rt.lock().expect("cannot_acquire_revision_tree_for_writing");
+                let winning_revision = rt_w.get_winner().ok_or_else(|| anyhow!("no_winner"))?;
+                if winning_revision.is_deleted() {
+                    continue;
+                }
+                // If any of the leafs is a diff we need to snapshot
+                for leaf in rt_w.get_leafs() {
+                    let base_descriptor = self.read_array_descriptor(leaf)?;
+                    if base_descriptor.is_diff() {
+                        // Read the full array object
+                        let object = self
+                            .read_object_at_revision(uuid, &rt_w, winning_revision)
+                            .unwrap();
+                        let digest = digest_object(&object).unwrap(); // Digest of the current object
+                        let rev = Revision::new_updated(digest, winning_revision);
+                        let winning_revision = winning_revision.clone();
+                        rt_w.add(rev.clone(), Some(winning_revision.clone()), true);
+                        let mut data_w =
+                            self.data.write().expect("cannot_acquire_data_for_writing");
+                        data_w.write_object(&rev, object).unwrap();
+                        drop(data_w);
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     // **********************************************************************
     // **********************************************************************
     //
