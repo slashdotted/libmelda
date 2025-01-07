@@ -57,7 +57,7 @@ fn main() {
     println!("alice made another commit: {:?}", commit_result);
 
     // -- Read data
-    let data = melda_alice.read().expect("Failed to read");
+    let data = melda_alice.read(None).expect("Failed to read");
     let content = serde_json::to_string_pretty(&data).unwrap();
     println!("alice's current state{}", content);
 
@@ -123,7 +123,7 @@ fn main() {
     melda_alice.meld(&melda_bob).expect("Failed to meld");
     melda_alice.refresh().expect("failed to refresh");
 
-    let data = melda_alice.read().expect("Failed to read");
+    let data = melda_alice.read(None).expect("Failed to read");
 
     let content = serde_json::to_string_pretty(&data).unwrap();
     println!("alice pulled in bob's state");
@@ -169,7 +169,7 @@ fn main() {
     }
 
     // After resolution
-    let data = melda_alice.read().expect("Failed to read");
+    let data = melda_alice.read(None).expect("Failed to read");
 
     let content = serde_json::to_string_pretty(&data).unwrap();
     println!("alice final state");

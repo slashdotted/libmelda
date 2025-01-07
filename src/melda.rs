@@ -496,13 +496,13 @@ impl Melda {
     /// let mut replica = Melda::new(adapter.clone()).expect("cannot_initialize_crdt");
     /// let object = json!({ "somekey\u{266D}" : { "_id": "1", "key" : "alpha" }}).as_object().unwrap().clone();
     /// replica.update(object.clone());
-    /// let readback = replica.read().unwrap();
+    /// let readback = replica.read(None).unwrap();
     /// let content = serde_json::to_string(&readback).unwrap();
     /// assert_eq!("{\"_id\":\"\u{221A}\",\"somekey\u{266D}\":{\"_id\":\"1\",\"key\":\"alpha\"}}", content);
     /// let result = replica.delete_object("1");
     /// assert!(result.is_ok());
     /// assert_eq!(result.unwrap().unwrap(), "2-d_5423aab");
-    /// let readback = replica.read().unwrap();
+    /// let readback = replica.read(None).unwrap();
     /// let content = serde_json::to_string(&readback).unwrap();
     /// assert_eq!("{\"_id\":\"\u{221A}\",\"somekey\u{266D}\":null}", content);
     /// let result2 = replica.delete_object("xxxx");
@@ -1250,6 +1250,10 @@ impl Melda {
     }
 
     /// Reads the data structure and unflattens to a JSON object
+    /// 
+    /// # Arguments
+    ///
+    /// * `root` - Optional identifier of the root object (starting point)
     ///
     /// # Example
     /// ```
@@ -1261,7 +1265,7 @@ impl Melda {
     /// let mut replica = Melda::new(adapter.clone()).expect("cannot_initialize_crdt");
     /// let object = json!({ "somekey" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
     /// replica.update(object.clone());
-    /// let readback = replica.read().unwrap();
+    /// let readback = replica.read(None).unwrap();
     /// assert!(readback.contains_key("somekey"));
     /// let content = serde_json::to_string(&readback).unwrap();
     /// assert_eq!("{\"_id\":\"\u{221A}\",\"somekey\":[\"somedata\",1,2,3,4]}", content);
@@ -1270,7 +1274,7 @@ impl Melda {
     /// let mut replica = Melda::new(adapter.clone()).expect("cannot_initialize_crdt");
     /// let object = json!({ "somekey\u{266D}" : [ { "_id": "1", "key" : "alpha" }, { "_id": "2", "key" : "beta" } ] }).as_object().unwrap().clone();
     /// replica.update(object.clone());
-    /// let readback = replica.read().unwrap();
+    /// let readback = replica.read(None).unwrap();
     /// assert!(!readback.contains_key("somekey"));
     /// assert!(readback.contains_key("somekey\u{266D}"));
     /// let content = serde_json::to_string(&readback).unwrap();
@@ -1285,44 +1289,45 @@ impl Melda {
     /// // Continue editing on replica, removing one item
     /// let object = json!({ "somekey\u{266D}" : [ { "_id": "2", "key" : "beta" } ] }).as_object().unwrap().clone();
     /// replica.update(object.clone());
-    /// let readback = replica.read().unwrap();
+    /// let readback = replica.read(None).unwrap();
     /// let content = serde_json::to_string(&readback).unwrap();
     /// assert_eq!("{\"_id\":\"\u{221A}\",\"somekey\u{266D}\":[{\"_id\":\"2\",\"key\":\"beta\"}]}", content);
     /// // Commit changes on replica
     /// let info = json!({ "author" : "Some user", "date" : "2022-05-23 13:47:00CET" }).as_object().unwrap().clone();
     /// replica.commit(Some(info));
-    /// let readback = replica.read().unwrap();
+    /// let readback = replica.read(None).unwrap();
     /// let content = serde_json::to_string(&readback).unwrap();
     /// assert_eq!("{\"_id\":\"\u{221A}\",\"somekey\u{266D}\":[{\"_id\":\"2\",\"key\":\"beta\"}]}", content);
     /// // Perform some changes on replica2 too
     /// let object = json!({ "somekey\u{266D}" : [ { "_id": "1", "key" : "alpha" }, { "_id": "2", "key" : "beta" }, { "_id": "3", "key" : "gamma" } ] }).as_object().unwrap().clone();
     /// replica2.update(object.clone());
-    /// let readback = replica2.read().unwrap();
+    /// let readback = replica2.read(None).unwrap();
     /// let content = serde_json::to_string(&readback).unwrap();
     /// assert_eq!("{\"_id\":\"\u{221A}\",\"somekey\u{266D}\":[{\"_id\":\"1\",\"key\":\"alpha\"},{\"_id\":\"2\",\"key\":\"beta\"},{\"_id\":\"3\",\"key\":\"gamma\"}]}", content);
     /// // Commit changes on replica2
     /// let info = json!({ "author" : "Another user", "date" : "2022-05-23 13:48:00CET" }).as_object().unwrap().clone();
     /// replica2.commit(Some(info));
-    /// let readback = replica2.read().unwrap();
+    /// let readback = replica2.read(None).unwrap();
     /// let content = serde_json::to_string(&readback).unwrap();
     /// assert_eq!("{\"_id\":\"\u{221A}\",\"somekey\u{266D}\":[{\"_id\":\"1\",\"key\":\"alpha\"},{\"_id\":\"2\",\"key\":\"beta\"},{\"_id\":\"3\",\"key\":\"gamma\"}]}", content);
     /// // Meld changes from replica2 back on replica
     /// replica.meld(&replica2);
     /// // Melding does not change the state of replica
-    /// let readback = replica.read().unwrap();
+    /// let readback = replica.read(None).unwrap();
     /// let content = serde_json::to_string(&readback).unwrap();
     /// assert_eq!("{\"_id\":\"\u{221A}\",\"somekey\u{266D}\":[{\"_id\":\"2\",\"key\":\"beta\"}]}", content);
     /// // Refresh the state of replica
     /// replica.refresh();
-    /// let readback = replica.read().unwrap();
+    /// let readback = replica.read(None).unwrap();
     /// let content = serde_json::to_string(&readback).unwrap();
     /// assert_eq!("{\"_id\":\"\u{221A}\",\"somekey\u{266D}\":[{\"_id\":\"2\",\"key\":\"beta\"},{\"_id\":\"3\",\"key\":\"gamma\"}]}", content);
-    pub fn read(&self) -> Result<Map<String, Value>> {
+    pub fn read(&self,root : Option<&str>) -> Result<Map<String, Value>> {
+        let start = root.unwrap_or(ROOT_ID);
         if !self
             .documents
             .read()
             .expect("failed_to_acquire_documents_for_reading")
-            .contains_key(ROOT_ID)
+            .contains_key(start)
         {
             bail!("no_root")
         } else {
@@ -1346,8 +1351,8 @@ impl Melda {
                     }
                 }
             });
-            let c_r = c.lock().unwrap();
-            let root = c_r.get(ROOT_ID).expect("root_object_not_found");
+            let c_r: std::sync::MutexGuard<'_, HashMap<String, Map<String, Value>>> = c.lock().unwrap();
+            let root = c_r.get(start).expect("root_object_not_found");
             let root = Value::from(root.clone());
             let result = unflatten(&c_r, &root)
                 .unwrap()
@@ -1375,18 +1380,22 @@ impl Melda {
     /// let mut replica = Melda::new(adapter.clone()).expect("cannot_initialize_crdt");
     /// let object = json!({ "somekey" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
     /// replica.update(object.clone());
-    /// let readback = replica.read().unwrap();
+    /// let readback = replica.read(None).unwrap();
     /// assert!(readback.contains_key("somekey"));
-    pub fn update(&self, obj: Map<String, Value>) -> Result<()> {
+    /// let object = json!({ "_id" : "myroot", "somekey2" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
+    /// replica.update(object.clone());
+    /// let readback = replica.read(Some("myroot")).unwrap();
+    /// assert!(readback.contains_key("somekey2"));
+    /// let content = serde_json::to_string(&readback).unwrap();
+    /// let check = serde_json::to_string(&object).unwrap();
+    /// assert!(content == check);
+    pub fn update(&self, obj: Map<String, Value>) -> Result<String> {
         let mut extracted_objects = HashMap::<String, Map<String, Value>>::new();
         let path = Vec::<String>::new();
         let root = Value::from(obj);
         // Flatten the structure
         let root = flatten(&mut extracted_objects, &root, &path);
         let root = root.as_str().expect("root_identifier_not_a_string");
-        if root != ROOT_ID {
-            bail!("invalid_root_id");
-        }
         // Check for objects that have disappeared
         // i.e. objects that are found in the current state but are not within the extracted objects
         let docs_r = self
@@ -1406,7 +1415,7 @@ impl Melda {
             self.update_object(&uuid, obj)
                 .expect("unable_to_update_object");
         });
-        Ok(())
+        Ok(root.to_string())
     }
 
     /// Returns a set of the object (identifiers) which have ongoing conflicts
@@ -2030,12 +2039,12 @@ impl Melda {
     /// assert!(!replica.has_staging());
     /// replica.stage_full_snapshot().unwrap();
     /// assert!(!replica.has_staging());
-    /// let readback = replica.read().unwrap();
+    /// let readback = replica.read(None).unwrap();
     /// let content = serde_json::to_string(&readback).unwrap();
     /// assert_eq!("{\"_id\":\"\u{221A}\",\"somekey\u{266D}\":[{\"_id\":\"somedata2\",\"value\":1},{\"_id\":\"otherdata\",\"value\":2}]}", content);
     /// let object = json!({ "somekey\u{266D}" : [ { "_id" : "somedata2", "value" : 1u32 }, { "_id" : "otherdata2", "value" : 3u32 } ] }).as_object().unwrap().clone();
     /// replica.update(object).unwrap();
-    /// let readback = replica.read().unwrap();
+    /// let readback = replica.read(None).unwrap();
     /// let content = serde_json::to_string(&readback).unwrap();
     /// assert_eq!("{\"_id\":\"\u{221A}\",\"somekey\u{266D}\":[{\"_id\":\"somedata2\",\"value\":1},{\"_id\":\"otherdata2\",\"value\":3}]}", content);
     pub fn stage_full_snapshot(&self) -> Result<()> {

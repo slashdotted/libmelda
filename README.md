@@ -218,7 +218,7 @@ todolist/
 
 At any time it is possible to read the state of the CRDT back into a JSON document using the **read** method:
 ```rust
-let data = m.read().expect("Failed to read");
+let data = m.read(None).expect("Failed to read");
 let content = serde_json::to_string(&data).unwrap();
 println!("{}", content);
 ```
@@ -287,7 +287,7 @@ m.refresh();
 
 The **refresh** method is used to load updates from the storage backend after the meld operation. Alice can then read the new state of the CRDT with:
 ```rust
-let data = m.read().expect("Failed to read");
+let data = m.read(None).expect("Failed to read");
 let content = serde_json::to_string(&data).unwrap();
 println!("{}", content);
 ```
