@@ -637,6 +637,10 @@ impl Melda {
         &self,
         information: Option<Map<String, Value>>,
     ) -> Result<Option<BTreeSet<String>>> {
+        // If there is nothing staged, skip commit
+        if !self.has_staging() {
+            return Ok(None);
+        }
         // Automatically resolve conflicts in array_descriptors
         for (uuid, rt) in self.documents.read().unwrap().iter() {
             if is_array_descriptor(uuid) {
