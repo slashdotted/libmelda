@@ -88,19 +88,7 @@ And the todo item itself:
 ```
 Please notice that each object has its own unique identifier stored in the **_id** field. If an identifier is not provided by the client application, Melda will auto-generate one. The root object is always identified by **√** (this identifier cannot be changed by the client application). Since each object of the **items♭** array is tracked individually, if an user adds an element to the array and later merges his/her replica with another user all changes will be preserved.
 
-If the collection of items becomes too large we can ask Melda to only store difference arrays between the newest revision of the document and the previous one. For that we simply need to prefix the key of the **items** field with the Δ character (greek capital letter delta). Version **delta_alice.json** might therefore become:
-```json
-{
-	"software" : "MeldaDo",
-	"version" : "1.0.0",
-	"Δitems♭" : [
-	   {"_id" : "alice_todo_01", "title" : "Buy milk", "description" : "Go to the grocery store"}
-	]
-}
-
-```
-To keep things simple, in the following we will not use difference arrays. Let's go back to our example situation...
-Up until this point we only considered some JSON data, but we have yet to see how we can interact with Melda in order to update the data structure.
+If the collection of items becomes too large don't worry! Melda only stores the differences between the newest revision of the document and the previous one instead of the full array. Now let's see how we can interact with Melda in order to update the data structure.
 
 ## Adapters
 
