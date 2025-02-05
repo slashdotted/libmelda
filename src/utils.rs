@@ -201,23 +201,25 @@ pub fn flatten(
 }
 
 /// Unflattens a collection of objects starting from an initial value
-pub fn unflatten(c: &HashMap<String, Map<String, Value>>, value: &Value) -> Option<Value> {
+pub fn unflatten(c: &mut HashMap<String, Map<String, Value>>, value: &Value) -> Option<Value> {
     match value {
         Value::String(s) => {
             if s.starts_with(STRING_ESCAPE_PREFIX) {
                 Some(Value::from(unescape(s)))
             } else if is_array_descriptor(s) {
-                // Fetch corresponding descriptor
-                match c.get(s) {
+                // Fetch corresponding descriptor (and remove it from the collection, since we will not use it multiple times)
+                let v = c.remove(s);
+                match v {
                     Some(v) => {
                         if let Some(v) = v.get(ARRAY_DESCRIPTOR_ORDER_FIELD) {
                             if let Some(order) = v.as_array() {
                                 let mut array: Vec<Value> = vec![];
                                 for uuid in order {
                                     if let Some(uuid) = uuid.as_str() {
-                                        if let Some(o) = c.get(uuid) {
+                                        // We remove the object from the collection when we use it
+                                        if let Some(o) = c.remove(uuid) {
                                             if let Some(item) =
-                                                unflatten(c, &Value::from(o.clone()))
+                                                unflatten(c, &Value::from(o))
                                             {
                                                 array.push(item);
                                             }
@@ -235,8 +237,8 @@ pub fn unflatten(c: &HashMap<String, Map<String, Value>>, value: &Value) -> Opti
                     None => panic!("unknown_descriptor_object"),
                 }
             } else {
-                match c.get(s) {
-                    Some(v) => unflatten(c, &Value::from(v.clone())),
+                match c.remove(s) {
+                    Some(v) => unflatten(c, &Value::from(v)),
                     None => Some(json!(null)),
                 }
             }
@@ -542,7 +544,7 @@ mod tests {
                 mc.insert(k.clone(), vn);
             });
             let rootobj = mc.get(ROOT_ID).unwrap().clone();
-            let obj = unflatten(&mc, &serde_json::Value::from(rootobj)).unwrap();
+            let obj = unflatten(&mut mc, &serde_json::Value::from(rootobj)).unwrap();
             let reconstructed = serde_json::to_string(&obj).unwrap();
             let original = serde_json::to_string(&v).unwrap();
             assert!(reconstructed == original);
@@ -575,7 +577,7 @@ mod tests {
                 mc.insert(k.clone(), vn);
             });
             let rootobj = mc.get(ROOT_ID).unwrap().clone();
-            let obj = unflatten(&mc, &serde_json::Value::from(rootobj)).unwrap();
+            let obj = unflatten(&mut mc, &serde_json::Value::from(rootobj)).unwrap();
             let reconstructed = serde_json::to_string(&obj).unwrap();
             let original = serde_json::to_string(&v).unwrap();
             assert!(reconstructed == original);

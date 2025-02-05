@@ -1355,10 +1355,10 @@ impl Melda {
                     }
                 }
             });
-            let c_r: std::sync::MutexGuard<'_, HashMap<String, Map<String, Value>>> = c.lock().unwrap();
+            let mut c_r: std::sync::MutexGuard<'_, HashMap<String, Map<String, Value>>> = c.lock().unwrap();
             let root = c_r.get(start).expect("root_object_not_found");
             let root = Value::from(root.clone());
-            let result = unflatten(&c_r, &root)
+            let result = unflatten(&mut c_r, &root)
                 .unwrap()
                 .as_object()
                 .expect("not_an_object")
