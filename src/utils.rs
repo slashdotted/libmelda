@@ -218,9 +218,7 @@ pub fn unflatten(c: &mut HashMap<String, Map<String, Value>>, value: &Value) -> 
                                     if let Some(uuid) = uuid.as_str() {
                                         // We remove the object from the collection when we use it
                                         if let Some(o) = c.remove(uuid) {
-                                            if let Some(item) =
-                                                unflatten(c, &Value::from(o))
-                                            {
+                                            if let Some(item) = unflatten(c, &Value::from(o)) {
                                                 array.push(item);
                                             }
                                         }

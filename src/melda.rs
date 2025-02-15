@@ -1254,7 +1254,7 @@ impl Melda {
     }
 
     /// Reads the data structure and unflattens to a JSON object
-    /// 
+    ///
     /// # Arguments
     ///
     /// * `root` - Optional identifier of the root object (starting point)
@@ -1325,7 +1325,7 @@ impl Melda {
     /// let readback = replica.read(None).unwrap();
     /// let content = serde_json::to_string(&readback).unwrap();
     /// assert_eq!("{\"_id\":\"\u{221A}\",\"somekey\u{266D}\":[{\"_id\":\"2\",\"key\":\"beta\"},{\"_id\":\"3\",\"key\":\"gamma\"}]}", content);
-    pub fn read(&self,root : Option<&str>) -> Result<Map<String, Value>> {
+    pub fn read(&self, root: Option<&str>) -> Result<Map<String, Value>> {
         let start = root.unwrap_or(ROOT_ID);
         if !self
             .documents
@@ -1355,7 +1355,8 @@ impl Melda {
                     }
                 }
             });
-            let mut c_r: std::sync::MutexGuard<'_, HashMap<String, Map<String, Value>>> = c.lock().unwrap();
+            let mut c_r: std::sync::MutexGuard<'_, HashMap<String, Map<String, Value>>> =
+                c.lock().unwrap();
             let root = c_r.get(start).expect("root_object_not_found");
             let root = Value::from(root.clone());
             let result = unflatten(&mut c_r, &root)
