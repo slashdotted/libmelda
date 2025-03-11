@@ -407,6 +407,9 @@ In the [Kibi](https://github.com/slashdotted/kibi) repository you will find an e
 
 # Publications
 
+## 2025
+Amos Brocco "Introducing Support for Move Operations in Melda CRDT", [arXiv:2503.04811](https://arxiv.org/abs/2503.04811)
+
 ## 2022
 Amos Brocco "Melda: A General Purpose Delta State JSON CRDT". 9th Workshop on Principles and Practice of Consistency for Distributed Data (PaPoC'22). April 2022. [PDF](https://amosbrocco.ch/pubs/PaPoC_2022_Submission.pdf) [BibTex](https://amosbrocco.ch/pubs/bib/PaPoC_2022_Submission.bib)
 
