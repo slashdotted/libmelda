@@ -15,7 +15,7 @@ fn main() {
         Box::new(FilesystemAdapter::new("todolist_alice").expect("Cannot initialize adapter"));
 
     // initialize CRDT data structure
-    let melda_alice =
+    let mut melda_alice =
         Melda::new(Arc::new(RwLock::new(adapter_alice))).expect("Failed to inizialize Melda");
 
     // create new JSON object
@@ -33,7 +33,7 @@ fn main() {
         .expect("Not an object")
         .clone();
     let commit_result = melda_alice.commit(Some(info)).unwrap().unwrap();
-    println!("alice made a commit: {}", commit_result);
+    println!("alice made a commit: {:?}", commit_result);
 
     // create a new version of the json object
     let v = json!({ "software" : "MeldaDo", "version" : "1.0.0", "items♭":
@@ -54,10 +54,10 @@ fn main() {
 
     // commit second change
     let commit_result = melda_alice.commit(Some(info)).unwrap().unwrap();
-    println!("alice made another commit: {}", commit_result);
+    println!("alice made another commit: {:?}", commit_result);
 
     // -- Read data
-    let data = melda_alice.read().expect("Failed to read");
+    let data = melda_alice.read(None).expect("Failed to read");
     let content = serde_json::to_string_pretty(&data).unwrap();
     println!("alice's current state{}", content);
 
@@ -93,7 +93,7 @@ fn main() {
 
     // bob commit's the result
     let commit_result = melda_bob.commit(Some(info)).unwrap().unwrap();
-    println!("bob made a commit: {}", commit_result);
+    println!("bob made a commit: {:?}", commit_result);
 
     // meanwhile Alice continues to make changes...
     let v = json!({ "software" : "MeldaDo", "version" : "1.0.0", "items♭" :
@@ -114,16 +114,65 @@ fn main() {
         .commit(Some(info))
         .expect("commit failed")
         .unwrap();
-    println!("meanwhile alice made yet another commit: {}", commit_result);
+    println!(
+        "meanwhile alice made yet another commit: {:?}",
+        commit_result
+    );
 
     // Bob shares his own copy with Alice
     melda_alice.meld(&melda_bob).expect("Failed to meld");
     melda_alice.refresh().expect("failed to refresh");
 
-    let data = melda_alice.read().expect("Failed to read");
+    let data = melda_alice.read(None).expect("Failed to read");
 
     let content = serde_json::to_string_pretty(&data).unwrap();
     println!("alice pulled in bob's state");
+    println!("{}", content);
+
+    // Check for conflicts
+    for uuid in melda_alice.in_conflict() {
+        println!("{} has conflicts:", uuid);
+        let winner = melda_alice.get_winner(&uuid).unwrap();
+        let conflicting = melda_alice.get_conflicting(&uuid).unwrap();
+        println!(
+            "Winner: {:?} -> {:?}",
+            winner,
+            melda_alice.get_value(&uuid, Some(&winner))
+        );
+        for c in conflicting {
+            println!("Conflict {:?}", melda_alice.get_value(&uuid, Some(&c)));
+        }
+    }
+
+    // Resolve with winner
+    println!("Resolving conflicts");
+    for uuid in melda_alice.in_conflict() {
+        let winner = melda_alice.get_winner(&uuid).unwrap();
+        melda_alice
+            .resolve_as(&uuid, &winner)
+            .expect("Failed to resolve");
+    }
+
+    // Check for conflicts
+    for uuid in melda_alice.in_conflict() {
+        println!("{} has conflicts:", uuid);
+        let winner = melda_alice.get_winner(&uuid).unwrap();
+        let conflicting = melda_alice.get_conflicting(&uuid).unwrap();
+        println!(
+            "Winner: {:?} -> {:?}",
+            winner,
+            melda_alice.get_value(&uuid, Some(&winner))
+        );
+        for c in conflicting {
+            println!("Conflict {:?}", melda_alice.get_value(&uuid, Some(&c)));
+        }
+    }
+
+    // After resolution
+    let data = melda_alice.read(None).expect("Failed to read");
+
+    let content = serde_json::to_string_pretty(&data).unwrap();
+    println!("alice final state");
     println!("{}", content);
 }
 

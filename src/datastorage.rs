@@ -1,5 +1,5 @@
 // Melda - Delta State JSON CRDT
-// Copyright (C) 2021-2022 Amos Brocco <amos.brocco@supsi.ch>
+// Copyright (C) 2021-2024 Amos Brocco <amos.brocco@supsi.ch>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex, RwLock};
 pub struct DataStorage {
     adapter: Arc<RwLock<Box<dyn Adapter>>>,
     stage: HashMap<String, Value>,
-    values: HashMap<String, (String, usize, usize)>,
+    committed_objects: HashMap<String, (String, usize, usize)>,
     loaded_packs: BTreeSet<String>,
     cache: Mutex<LruCache<String, Map<String, Value>>>,
 }
@@ -45,35 +45,12 @@ impl DataStorage {
         DataStorage {
             adapter,
             stage: HashMap::<String, Value>::new(),
-            values: HashMap::<String, (String, usize, usize)>::new(),
+            committed_objects: HashMap::<String, (String, usize, usize)>::new(),
             loaded_packs: BTreeSet::new(),
             cache: Mutex::new(LruCache::<String, Map<String, Value>>::new(
                 NonZeroUsize::new(cache_size).unwrap(),
             )),
         }
-    }
-
-    /// Merges another DataStorage into this one
-    pub fn merge(&mut self, other: &DataStorage) -> Result<()> {
-        other.values.keys().for_each(|digest| {
-            if !self.values.contains_key(digest) && !self.stage.contains_key(digest) {
-                self.write_raw_value(
-                    digest,
-                    other.read_raw_value(digest).expect("failed_to_read_data"),
-                )
-                .expect("failed_to_write_data");
-            }
-        });
-        other.stage.keys().for_each(|digest| {
-            if !self.values.contains_key(digest) && !self.stage.contains_key(digest) {
-                self.write_raw_value(
-                    digest,
-                    other.read_raw_value(digest).expect("failed_to_read_data"),
-                )
-                .expect("failed_to_write_data");
-            }
-        });
-        Ok(())
     }
 
     /// Loads a pack file (and rebuilds the index)
@@ -102,11 +79,12 @@ impl DataStorage {
                 if flag == 0 {
                     let digest = digest_bytes(&data[obj_start..offset + 1]);
                     let count = offset + 1 - obj_start;
-                    self.values
+                    self.committed_objects
                         .insert(digest, (name.to_string(), obj_start, count));
                 };
             }
         }
+        self.loaded_packs.insert(name.to_string());
         Ok(())
     }
 
@@ -116,9 +94,10 @@ impl DataStorage {
             let d = v.as_array().unwrap();
             let offset = d[0].as_i64().unwrap() as usize;
             let count = d[1].as_i64().unwrap() as usize;
-            self.values
+            self.committed_objects
                 .insert(k.clone(), (index.to_string(), offset, count));
         }
+        self.loaded_packs.insert(index.to_string());
         Ok(())
     }
 
@@ -146,7 +125,7 @@ impl DataStorage {
             bail!("non_empty_data_stage");
         }
         self.loaded_packs.clear();
-        self.values.clear();
+        self.committed_objects.clear();
         let pack_list = self.adapter.read().unwrap().list_objects(PACK_EXTENSION)?;
         let index_list = self.adapter.read().unwrap().list_objects(INDEX_EXTENSION)?;
         let index_set = index_list.into_iter().collect::<HashSet<_>>();
@@ -157,7 +136,6 @@ impl DataStorage {
                 } else {
                     self.load_pack(i)?;
                 }
-                self.loaded_packs.insert(i.clone());
             }
         }
         Ok(pack_list)
@@ -182,7 +160,6 @@ impl DataStorage {
                 } else {
                     self.load_pack(i)?;
                 }
-                self.loaded_packs.insert(i.clone());
                 new_packs.push(i.clone());
             }
         }
@@ -206,52 +183,43 @@ impl DataStorage {
         }
     }
 
-    pub fn replicate(&mut self, other: &DataStorage) -> Result<()> {
-        for p in &other.loaded_packs {
-            if !self.loaded_packs.contains(p) {
-                let rawdata = self.read_raw_bytes(p, 0, 0)?;
-                self.write_raw_bytes(p, &rawdata)?;
-            }
-        }
-        Ok(())
-    }
-
     /// Writes an object associating it with the given revision (digest)
     pub fn write_object(&mut self, rev: &Revision, obj: Map<String, Value>) -> Result<()> {
-        if rev.is_resolved() || rev.is_deleted() || rev.is_empty() {
+        if rev.is_resolved() || rev.is_deleted() || rev.is_empty() || rev.is_charcode() {
             Ok(())
         } else {
             // Otherwise store according to the object digest
-            if rev.digest.len() <= 8 && u32::from_str_radix(&rev.digest, 16).is_ok() {
-                Ok(())
-            } else {
-                self.write_raw_value(&rev.digest, obj.clone().into())?;
-                {
-                    let mut cache = self.cache.lock().unwrap();
-                    cache.put(rev.digest.to_string(), obj); // Only cache the full object
-                }
-                Ok(())
+            self.write_raw_value(rev.digest(), obj.clone().into())?;
+            {
+                let mut cache = self.cache.lock().unwrap();
+                cache.put(rev.digest().to_string(), obj); // Only cache the full object
             }
+            Ok(())
         }
     }
 
     /// Reads an object at the given revision
     pub fn read_object(&self, revision: &Revision) -> Result<Map<String, Value>> {
-        if revision.is_deleted() {
+        if revision.is_empty() {
+            Ok(json!({}).as_object().unwrap().clone())
+        } else if revision.is_deleted() {
             // Special case, deleted object
             Ok(json!({"_deleted":true}).as_object().unwrap().clone())
         } else if revision.is_resolved() {
             // Special case, resolved object
             Ok(json!({"_resolved":true}).as_object().unwrap().clone())
-        } else if revision.digest.len() <= 8 && u32::from_str_radix(&revision.digest, 16).is_ok() {
+        } else if revision.is_charcode() {
             // Special case, simple character
             let mut o = Map::<String, Value>::new();
-            o.insert(HASH_FIELD.to_string(), Value::from(revision.digest.clone()));
+            o.insert(
+                HASH_FIELD.to_string(),
+                Value::from(revision.digest().clone()),
+            );
             Ok(o)
-        } else if let Some(object) = self.cache.lock().unwrap().get(&revision.digest) {
+        } else if let Some(object) = self.cache.lock().unwrap().get(revision.digest()) {
             Ok(object.clone())
         } else {
-            let value = self.read_raw_value(&revision.digest)?;
+            let value = self.read_raw_value(revision.digest())?;
             let object = value.as_object().expect("expecting_an_object");
             Ok(object.clone())
         }
@@ -259,7 +227,7 @@ impl DataStorage {
 
     /// Writes the given (JSON) value into the temporary pack (if not already there)
     pub fn write_raw_value(&mut self, digest: &str, obj: Value) -> Result<()> {
-        if !self.values.contains_key(digest) && !self.stage.contains_key(digest) {
+        if !self.committed_objects.contains_key(digest) && !self.stage.contains_key(digest) {
             self.stage.insert(digest.to_string(), obj);
         }
         Ok(())
@@ -267,7 +235,7 @@ impl DataStorage {
 
     /// Reads a JSON value given its digest
     pub fn read_raw_value(&self, digest: &str) -> Result<Value> {
-        if let Some(value) = self.values.get(digest) {
+        if let Some(value) = self.committed_objects.get(digest) {
             let (pack, offset, length) = value;
             let key = pack.clone() + PACK_EXTENSION;
             let data = self
@@ -322,6 +290,7 @@ impl DataStorage {
             adapter.write_object(&index_key, index_map_contents.as_bytes())?;
             drop(adapter);
         }
+        // load_index_object will update loaded_packs
         self.load_index_object(&pack_digest, &index_map)?;
         self.stage.clear();
         Ok(Some(pack_digest))
@@ -335,11 +304,15 @@ impl DataStorage {
         Ok(Value::from(r))
     }
 
+    pub fn has_staging(&self) -> bool {
+        !self.stage.is_empty()
+    }
+
     pub fn replay_stage(&mut self, s: &Value) -> Result<()> {
         if s.is_object() {
             let s = s.as_object().unwrap();
             for (digest, v) in s {
-                if !self.values.contains_key(digest) {
+                if !self.committed_objects.contains_key(digest) {
                     self.stage.insert(digest.clone(), v.clone());
                 }
             }
@@ -349,18 +322,23 @@ impl DataStorage {
         }
     }
 
-    pub fn read_raw_bytes(&self, key: &str, offset: usize, length: usize) -> Result<Vec<u8>> {
+    pub fn read_raw_item(&self, key: &str, offset: usize, length: usize) -> Result<Vec<u8>> {
         self.adapter
             .read()
             .unwrap()
             .read_object(key, offset, length)
     }
 
-    pub fn write_raw_bytes(&mut self, key: &str, data: &[u8]) -> Result<()> {
+    pub fn write_raw_item(&mut self, key: &str, data: &[u8]) -> Result<()> {
         self.adapter.write().unwrap().write_object(key, data)
     }
 
     pub fn list_raw_items(&self, ext: &str) -> Result<Vec<String>> {
         self.adapter.read().unwrap().list_objects(ext)
+    }
+
+    /// Returns the underlying storage adapter
+    pub fn get_adapter(&self) -> Arc<RwLock<Box<dyn Adapter>>> {
+        self.adapter.clone()
     }
 }

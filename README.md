@@ -88,19 +88,7 @@ And the todo item itself:
 ```
 Please notice that each object has its own unique identifier stored in the **_id** field. If an identifier is not provided by the client application, Melda will auto-generate one. The root object is always identified by **√** (this identifier cannot be changed by the client application). Since each object of the **items♭** array is tracked individually, if an user adds an element to the array and later merges his/her replica with another user all changes will be preserved.
 
-If the collection of items becomes too large we can ask Melda to only store difference arrays between the newest revision of the document and the previous one. For that we simply need to prefix the key of the **items** field with the Δ character (greek capital letter delta). Version **delta_alice.json** might therefore become:
-```json
-{
-	"software" : "MeldaDo",
-	"version" : "1.0.0",
-	"Δitems♭" : [
-	   {"_id" : "alice_todo_01", "title" : "Buy milk", "description" : "Go to the grocery store"}
-	]
-}
-
-```
-To keep things simple, in the following we will not use difference arrays. Let's go back to our example situation...
-Up until this point we only considered some JSON data, but we have yet to see how we can interact with Melda in order to update the data structure.
+If the collection of items becomes too large don't worry! Melda only stores the differences between the newest revision of the document and the previous one instead of the full array. Now let's see how we can interact with Melda in order to update the data structure.
 
 ## Adapters
 
@@ -173,7 +161,7 @@ let info = json!({ "author" : "Alice", "description" : "First commit" })
 	.clone();
 let commit_result = m.commit(Some(info));
 ```
-The result of the **commit** is either an error, **None** if there were no changes to be committed or **Some(String)** if changes were committed: the string is the commit identifier.
+The result of the **commit** is either an error, **None** if there were no changes to be committed or **Some(BTreeSet<String>)** if changes were committed: the set contains the identifier of the committed block.
 Upon success, on disk (in the **todolist** directory) the following content should have been created:
 ```
 todolist/
@@ -218,7 +206,7 @@ todolist/
 
 At any time it is possible to read the state of the CRDT back into a JSON document using the **read** method:
 ```rust
-let data = m.read().expect("Failed to read");
+let data = m.read(None).expect("Failed to read");
 let content = serde_json::to_string(&data).unwrap();
 println!("{}", content);
 ```
@@ -287,7 +275,7 @@ m.refresh();
 
 The **refresh** method is used to load updates from the storage backend after the meld operation. Alice can then read the new state of the CRDT with:
 ```rust
-let data = m.read().expect("Failed to read");
+let data = m.read(None).expect("Failed to read");
 let content = serde_json::to_string(&data).unwrap();
 println!("{}", content);
 ```
@@ -361,7 +349,8 @@ It is possible to navigate through commits by means of the **reload_until** meth
             break;
         }
     }
-    m.reload_until(block_id.as_ref().unwrap())
+    let anchors = BTreeSet::from([block_id.unwrap()]);
+    m.reload_until(&anchors)
         .expect("Failed to reload until origin");
 ```
 
@@ -381,9 +370,9 @@ When we meld two replicas that had some concurrent updates it is likely that con
 for uuid in  m.in_conflict() {
 	let winner = m.get_winner(&uuid).unwrap();
 	let conflicting = m.get_conflicting(&uuid).unwrap();
-	println!("Winner: {:?} -> {:?}", winner, m.get_value(&uuid, &winner));
+	println!("Winner: {:?} -> {:?}", winner, m.get_value(&uuid, Some(&winner)));
 	for c in conflicting {
-	    println!("Conflict {:?}", m.get_value(&uuid, &c));
+	    println!("Conflict {:?}", m.get_value(&uuid, Some(&c)));
 	}
 }
 ```
@@ -422,9 +411,10 @@ Amos Brocco "Delta-State JSON CRDT: Putting Collaboration on Solid Ground". (Bri
 amos _dot_ brocco _at_ supsi _dot_ ch
 
 # License
-(c)2021-2022 Amos Brocco,
+(c)2021-2025 Amos Brocco,
 GPL v3 (for now... but I will evaluate a change of license - to something like BSD3/MIT/... in the near future)
 
 # Acknowledgements
 
 Many thanks to @ngortheone (documentation updates, examples)
+Ena

@@ -1,5 +1,5 @@
 // Melda - Delta State JSON CRDT
-// Copyright (C) 2021-2022 Amos Brocco <amos.brocco@supsi.ch>
+// Copyright (C) 2021-2024 Amos Brocco <amos.brocco@supsi.ch>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -16,6 +16,7 @@
 use anyhow::{bail, Result};
 use lazy_static::lazy_static;
 use regex::Regex;
+use std::fmt;
 use std::hash::Hash;
 
 use crate::constants::{DELETED_HASH, EMPTY_HASH, RESOLVED_HASH};
@@ -29,9 +30,9 @@ lazy_static! {
 
 #[derive(Debug, Clone)]
 pub struct Revision {
-    pub index: u32,
-    pub digest: String,
-    pub tail: Option<String>,
+    index: u32,
+    digest: String,
+    tail: Option<String>,
 }
 
 impl Revision {
@@ -43,6 +44,18 @@ impl Revision {
             digest: String::new(),
             tail: None,
         }
+    }
+
+    pub fn digest(&self) -> &String {
+        &self.digest
+    }
+
+    pub fn index(&self) -> u32 {
+        self.index
+    }
+
+    pub fn is_charcode(&self) -> bool {
+        self.digest.len() <= 8 && u32::from_str_radix(&self.digest, 16).is_ok()
     }
 
     /// Constructs a new revision
@@ -141,16 +154,18 @@ impl Hash for Revision {
 }
 
 /// Conversion to a string
-impl ToString for Revision {
-    fn to_string(&self) -> String {
+impl fmt::Display for Revision {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.index > 1 {
-            self.index.to_string()
-                + &String::from("-")
-                + &self.digest
-                + &String::from("_")
-                + if let Some(t) = &self.tail { t } else { "" }
+            write!(
+                f,
+                "{}-{}_{}",
+                self.index,
+                &self.digest,
+                if let Some(t) = &self.tail { t } else { "" }
+            )
         } else {
-            self.index.to_string() + "-" + &self.digest
+            write!(f, "{}-{}", self.index, &self.digest)
         }
     }
 }
@@ -169,20 +184,7 @@ impl PartialEq for Revision {
 /// Partial Ordering
 impl PartialOrd for Revision {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        if self.is_resolved() && other.is_resolved() {
-            Some(self.to_string().cmp(&other.to_string()))
-        } else if self.is_resolved() {
-            // Resolved revisions always have the least priority
-            Some(std::cmp::Ordering::Less)
-        } else if other.is_resolved() {
-            Some(std::cmp::Ordering::Greater)
-        } else if self.index < other.index {
-            Some(std::cmp::Ordering::Less)
-        } else if self.index > other.index {
-            Some(std::cmp::Ordering::Greater)
-        } else {
-            self.to_string().partial_cmp(&other.to_string())
-        }
+        Some(self.cmp(other))
     }
 }
 
@@ -194,7 +196,20 @@ impl Eq for Revision {
 /// Full Ordering
 impl Ord for Revision {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.partial_cmp(other).unwrap()
+        if self.is_resolved() && other.is_resolved() {
+            self.to_string().cmp(&other.to_string())
+        } else if self.is_resolved() {
+            // Resolved revisions always have the least priority
+            std::cmp::Ordering::Less
+        } else if other.is_resolved() {
+            std::cmp::Ordering::Greater
+        } else if self.index < other.index {
+            std::cmp::Ordering::Less
+        } else if self.index > other.index {
+            std::cmp::Ordering::Greater
+        } else {
+            self.to_string().cmp(&other.to_string())
+        }
     }
 }
 
@@ -209,5 +224,17 @@ mod tests {
         assert!(r1 != r2);
         assert!(r1 < r2);
         assert!(r2 > r1);
+    }
+
+    #[test]
+    fn test_charcode() {
+        let r1 = crate::revision::Revision::from("1-alpha_beta").unwrap();
+        let r2 = crate::revision::Revision::from("2-1234_beta").unwrap();
+        let r3 = crate::revision::Revision::from("2-abcdef12_beta").unwrap();
+        let r4 = crate::revision::Revision::from("2-abcdef12abc_beta").unwrap();
+        assert!(!r1.is_charcode());
+        assert!(r2.is_charcode());
+        assert!(r3.is_charcode());
+        assert!(!r4.is_charcode());
     }
 }

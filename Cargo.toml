@@ -1,6 +1,6 @@
 [package]
 name = "melda"
-version = "0.2.3"
+version = "0.4.1"
 authors = ["Amos Brocco <amos.brocco@supsi.ch>"]
 edition = "2018"
 license = "GPL-3.0"
@@ -20,6 +20,8 @@ lazy_static = "1.4.0"
 serial_test = "1.0.0"
 lru = "0.10.0"
 openssl = "0.10.45"
+impl-tools = "0.10.0"
+gloo-utils = { version = "0.1", features = ["serde"] }
 
 # Solid Adapter dependencies
 rayon = "1.5.1"

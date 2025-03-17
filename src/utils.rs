@@ -1,5 +1,5 @@
 // Melda - Delta State JSON CRDT
-// Copyright (C) 2021-2022 Amos Brocco <amos.brocco@supsi.ch>
+// Copyright (C) 2021-2024 Amos Brocco <amos.brocco@supsi.ch>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -201,24 +201,24 @@ pub fn flatten(
 }
 
 /// Unflattens a collection of objects starting from an initial value
-pub fn unflatten(c: &HashMap<String, Map<String, Value>>, value: &Value) -> Option<Value> {
+pub fn unflatten(c: &mut HashMap<String, Map<String, Value>>, value: &Value) -> Option<Value> {
     match value {
         Value::String(s) => {
             if s.starts_with(STRING_ESCAPE_PREFIX) {
                 Some(Value::from(unescape(s)))
             } else if is_array_descriptor(s) {
-                // Fetch corresponding descriptor
-                match c.get(s) {
+                // Fetch corresponding descriptor (and remove it from the collection, since we will not use it multiple times)
+                let v = c.remove(s);
+                match v {
                     Some(v) => {
                         if let Some(v) = v.get(ARRAY_DESCRIPTOR_ORDER_FIELD) {
                             if let Some(order) = v.as_array() {
                                 let mut array: Vec<Value> = vec![];
                                 for uuid in order {
                                     if let Some(uuid) = uuid.as_str() {
-                                        if let Some(o) = c.get(uuid) {
-                                            if let Some(item) =
-                                                unflatten(c, &Value::from(o.clone()))
-                                            {
+                                        // We remove the object from the collection when we use it
+                                        if let Some(o) = c.remove(uuid) {
+                                            if let Some(item) = unflatten(c, &Value::from(o)) {
                                                 array.push(item);
                                             }
                                         }
@@ -235,8 +235,8 @@ pub fn unflatten(c: &HashMap<String, Map<String, Value>>, value: &Value) -> Opti
                     None => panic!("unknown_descriptor_object"),
                 }
             } else {
-                match c.get(s) {
-                    Some(v) => unflatten(c, &Value::from(v.clone())),
+                match c.remove(s) {
+                    Some(v) => unflatten(c, &Value::from(v)),
                     None => Some(json!(null)),
                 }
             }
@@ -521,6 +521,64 @@ mod tests {
             assert!(content == r#"{"value":1.23}"#);
             let content = serde_json::to_string(&c.get("bar")).unwrap();
             assert!(content == r#"{}"#);
+        }
+    }
+
+    #[test]
+    fn test_unflatten() {
+        {
+            let mut c = HashMap::<String, Map<String, Value>>::new();
+            let v = json!({ID_FIELD: ROOT_ID, "data" : [{ID_FIELD: "foo", "value": 1.23}, {ID_FIELD: "bar"}]});
+            let path = vec![];
+            let f = flatten(&mut c, &v, &path);
+            assert!(f.is_string());
+            assert!(f.as_str().unwrap() == ROOT_ID);
+            assert!(c.len() == 1);
+            // Create map of objects with ids
+            let mut mc = HashMap::<String, Map<String, Value>>::new();
+            c.iter().for_each(|(k, v)| {
+                let mut vn = v.clone();
+                vn.insert(ID_FIELD.to_string(), serde_json::Value::String(k.clone()));
+                mc.insert(k.clone(), vn);
+            });
+            let rootobj = mc.get(ROOT_ID).unwrap().clone();
+            let obj = unflatten(&mut mc, &serde_json::Value::from(rootobj)).unwrap();
+            let reconstructed = serde_json::to_string(&obj).unwrap();
+            let original = serde_json::to_string(&v).unwrap();
+            assert!(reconstructed == original);
+        }
+        {
+            let mut c = HashMap::<String, Map<String, Value>>::new();
+            let v = json!({ID_FIELD : ROOT_ID, "data\u{266D}" : [{ID_FIELD: "foo", "value": 1.23}, {ID_FIELD: "bar"}]});
+            let path = vec![];
+            let f = flatten(&mut c, &v, &path);
+            assert!(f.is_string());
+            assert!(f.as_str().unwrap() == ROOT_ID);
+            assert!(c.len() == 4);
+            assert!(c.contains_key(ROOT_ID));
+            assert!(c.contains_key("foo"));
+            assert!(c.contains_key("bar"));
+            let content = serde_json::to_string(&c.get(ROOT_ID)).unwrap();
+            assert!(
+                content
+                    == r#"{"data♭":"^e13aaf01b21510d633e7e19d055f67c73f93a417d9b5a0099f76513f86dc6b00"}"#
+            );
+            let content = serde_json::to_string(&c.get("foo")).unwrap();
+            assert!(content == r#"{"value":1.23}"#);
+            let content = serde_json::to_string(&c.get("bar")).unwrap();
+            assert!(content == r#"{}"#);
+            // Create map of objects with ids
+            let mut mc = HashMap::<String, Map<String, Value>>::new();
+            c.iter().for_each(|(k, v)| {
+                let mut vn = v.clone();
+                vn.insert(ID_FIELD.to_string(), serde_json::Value::String(k.clone()));
+                mc.insert(k.clone(), vn);
+            });
+            let rootobj = mc.get(ROOT_ID).unwrap().clone();
+            let obj = unflatten(&mut mc, &serde_json::Value::from(rootobj)).unwrap();
+            let reconstructed = serde_json::to_string(&obj).unwrap();
+            let original = serde_json::to_string(&v).unwrap();
+            assert!(reconstructed == original);
         }
     }
 

@@ -1,5 +1,5 @@
 // Melda - Delta State JSON CRDT
-// Copyright (C) 2021-2022 Amos Brocco <amos.brocco@supsi.ch>
+// Copyright (C) 2021-2024 Amos Brocco <amos.brocco@supsi.ch>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -14,78 +14,148 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not,ls see <http://www.gnu.org/licenses/>.
 use crate::revision::Revision;
-use std::{collections::BTreeSet, iter::FromIterator};
+use impl_tools::autoimpl;
+use std::{
+    cell::Cell,
+    collections::{BTreeMap, BTreeSet, HashSet},
+};
+
+#[autoimpl(PartialEq, Eq, PartialOrd, Ord ignore self.staging)]
+#[autoimpl(Debug, Clone)]
+pub struct RevisionTreeEntry {
+    parent: Option<Revision>,
+    staging: Cell<bool>,
+}
+
+impl RevisionTreeEntry {
+    pub fn new(parent: Option<Revision>, staging: bool) -> RevisionTreeEntry {
+        RevisionTreeEntry {
+            parent,
+            staging: Cell::new(staging),
+        }
+    }
+
+    pub fn is_staging(&self) -> bool {
+        self.staging.get()
+    }
+
+    pub fn commit(&self) {
+        self.staging.set(false);
+    }
+
+    pub fn get_parent(&self) -> &Option<Revision> {
+        &self.parent
+    }
+}
 
 #[derive(Debug, Clone)]
+
 pub struct RevisionTree {
-    revisions: BTreeSet<(Revision, Option<Revision>)>,
+    revisions: BTreeMap<Revision, RevisionTreeEntry>,
+    staging: bool,
+    leafs: BTreeSet<Revision>,        // Revisions that are not parents
+    ghost_parents: HashSet<Revision>, // Revisions that are parents but are not in revisions
 }
 
 impl RevisionTree {
     /// Constructs a new Revision Tree
     pub fn new() -> RevisionTree {
         RevisionTree {
-            revisions: BTreeSet::<(Revision, Option<Revision>)>::new(),
+            revisions: BTreeMap::<Revision, RevisionTreeEntry>::new(),
+            staging: false,
+            leafs: BTreeSet::<Revision>::new(),
+            ghost_parents: HashSet::<Revision>::new(),
         }
     }
 
     /// Add new revision, parent tuple
     /// This method returns true if the pair has been added, false if it already exists
-    pub fn add(&mut self, revision: Revision, parent: Option<Revision>) -> bool {
-        self.revisions.insert((revision, parent))
-    }
-
-    /// Removes an existing revision, parent tuple
-    /// This methods returns true if the pair was present (and then removed), false otherwise
-    pub fn remove(&mut self, revision: Revision, parent: Option<Revision>) -> bool {
-        self.revisions.remove(&(revision, parent))
+    pub fn add(&mut self, revision: Revision, parent: Option<Revision>, staging: bool) -> bool {
+        // Insert the new revision information
+        if self
+            .revisions
+            .insert(
+                revision.clone(),
+                RevisionTreeEntry::new(parent.clone(), staging),
+            )
+            .is_none()
+        {
+            // If the revision was a ghost parent it is not anymore
+            if !self.ghost_parents.remove(&revision) {
+                // The revision is not a parent, therefore it can be considered as a leaf
+                // if it's not resolved
+                if !revision.is_resolved() {
+                    self.leafs.insert(revision);
+                }
+            }
+            // Store the parent information
+            if let Some(p) = parent {
+                // If the parent is an unknown revision, store it as ghost parent
+                if !self.revisions.contains_key(&p) {
+                    self.ghost_parents.insert(p.clone());
+                } else {
+                    // Otherwise be sure that it's not considered a leaf
+                    self.leafs.remove(&p);
+                }
+            }
+            self.staging |= staging;
+            true
+        } else {
+            false
+        }
     }
 
     /// Returns the winning revision
     pub fn get_winner(&self) -> Option<&Revision> {
         match self.revisions.iter().max() {
-            Some((r, _)) => Some(r),
+            Some(rte) => Some(rte.0),
             None => None,
         }
     }
 
-    /// Returns all revisions
-    pub fn get_all_revs(&self) -> BTreeSet<&Revision> {
-        FromIterator::from_iter(self.revisions.iter().map(|(revision, _)| revision))
-    }
-
-    pub fn get_revisions(&self) -> &BTreeSet<(Revision, Option<Revision>)> {
+    /// Returns a reference to the internal set
+    pub fn get_revisions(&self) -> &BTreeMap<Revision, RevisionTreeEntry> {
         &self.revisions
     }
 
+    /// Check if the revision tree is empty
     pub fn is_empty(&self) -> bool {
         self.revisions.is_empty()
     }
 
-    /// Returns leafs revisions
-    pub fn get_leafs(&self) -> BTreeSet<&Revision> {
-        let mut leafs = self.get_all_revs();
-        self.revisions.iter().for_each(|(rev, parent)| {
-            if rev.is_resolved() {
-                leafs.remove(rev);
-            }
-            if !parent.is_none() {
-                leafs.remove(&parent.as_ref().unwrap());
-            }
-        });
-        leafs
+    /// Commits staged changes (resets staging flag)
+    pub fn commit(&mut self) {
+        if self.staging {
+            self.revisions.iter().for_each(|rte| {
+                rte.1.commit();
+            });
+            self.staging = false;
+        }
     }
 
-    /// Merges from another Revision Tree
-    pub fn merge(&mut self, other: &RevisionTree) {
-        self.revisions = self.revisions.union(&other.revisions).cloned().collect();
+    /// Abort staged changes
+    pub fn unstage(&mut self) {
+        if self.staging {
+            self.revisions.retain(|_, rte| !rte.staging.get());
+            self.staging = false;
+        }
+    }
+
+    /// Returns wheter there are outstanding changes to commit
+    pub fn has_staging(&self) -> bool {
+        self.staging
+    }
+
+    /// Returns leafs revisions
+    pub fn get_leafs(&self) -> &BTreeSet<Revision> {
+        &self.leafs
     }
 
     /// Returns the parent of a revision
     pub fn get_parent(&self, revision: &Revision) -> Option<&Revision> {
-        self.revisions.iter().find_map(|(rev, parent)| {
+        self.revisions.iter().find_map(|(rev, rte)| {
             if rev == revision {
-                match parent {
+                match &rte.parent {
                     Some(parent) => Some(parent),
                     None => None,
                 }
@@ -103,23 +173,32 @@ mod tests {
         rt.add(
             crate::revision::Revision::from("3-abc_cde").unwrap(),
             crate::revision::Revision::from("2-abc_cde").ok(),
+            true,
         );
         rt.add(
             crate::revision::Revision::from("3-xyz_cde").unwrap(),
             crate::revision::Revision::from("2-abc_cde").ok(),
+            true,
         );
         rt.add(
             crate::revision::Revision::from("3-aaa_cde").unwrap(),
             crate::revision::Revision::from("2-abc_cde").ok(),
+            true,
         );
         rt.add(
             crate::revision::Revision::from("4-r_cde").unwrap(),
             crate::revision::Revision::from("3-aaa_cde").ok(),
+            true,
         );
-        rt.add(crate::revision::Revision::from("1-abc").unwrap(), None);
+        rt.add(
+            crate::revision::Revision::from("1-abc").unwrap(),
+            None,
+            true,
+        );
         rt.add(
             crate::revision::Revision::from("2-abc_cde").unwrap(),
             crate::revision::Revision::from("1-abc").ok(),
+            true,
         );
         let w = rt.get_winner().unwrap();
         assert!(w.to_string() == "3-xyz_cde");
@@ -131,27 +210,37 @@ mod tests {
         rt.add(
             crate::revision::Revision::from("3-abc_cde").unwrap(),
             crate::revision::Revision::from("2-abc_cde").ok(),
+            true,
         );
         rt.add(
             crate::revision::Revision::from("3-xyz_cde").unwrap(),
             crate::revision::Revision::from("2-abc_cde").ok(),
+            true,
         );
         rt.add(
             crate::revision::Revision::from("3-aaa_cde").unwrap(),
             crate::revision::Revision::from("2-abc_cde").ok(),
+            true,
         );
         rt.add(
             crate::revision::Revision::from("4-r_cde").unwrap(),
             crate::revision::Revision::from("3-aaa_cde").ok(),
+            true,
         );
         rt.add(
             crate::revision::Revision::from("4-xyz_cde").unwrap(),
             crate::revision::Revision::from("3-xyz_cde").ok(),
+            true,
         );
-        rt.add(crate::revision::Revision::from("1-abc").unwrap(), None);
+        rt.add(
+            crate::revision::Revision::from("1-abc").unwrap(),
+            None,
+            true,
+        );
         rt.add(
             crate::revision::Revision::from("2-abc_cde").unwrap(),
             crate::revision::Revision::from("1-abc").ok(),
+            true,
         );
         let l = rt.get_leafs();
         assert!(l.len() == 2);

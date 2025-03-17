@@ -1,5 +1,5 @@
 // Melda - Delta State JSON CRDT
-// Copyright (C) 2021-2022 Amos Brocco <amos.brocco@supsi.ch>
+// Copyright (C) 2021-2024 Amos Brocco <amos.brocco@supsi.ch>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -362,6 +362,9 @@ mod tests {
     #[test]
     #[serial]
     fn test_solid_read_object_flate() {
+        if !std::env::var("MELDA_SOLID_URL").is_ok() {
+            return;
+        };
         check_env();
         let url = std::env::var("MELDA_SOLID_URL").expect("MELDA_SOLID_URL not set");
         let folder = std::env::var("MELDA_SOLID_FOLDER").expect("MELDA_SOLID_FOLDER not set");
@@ -391,6 +394,9 @@ mod tests {
     #[test]
     #[serial]
     fn test_solid_write_object_flate() {
+        if !std::env::var("MELDA_SOLID_URL").is_ok() {
+            return;
+        };
         check_env();
         let url = std::env::var("MELDA_SOLID_URL").expect("MELDA_SOLID_URL not set");
         let folder = std::env::var("MELDA_SOLID_FOLDER").expect("MELDA_SOLID_FOLDER not set");
@@ -440,6 +446,9 @@ mod tests {
     #[test]
     #[serial]
     fn test_solid_list_objects_flate() {
+        if !std::env::var("MELDA_SOLID_URL").is_ok() {
+            return;
+        };
         check_env();
         let url = std::env::var("MELDA_SOLID_URL").expect("MELDA_SOLID_URL not set");
         let folder = std::env::var("MELDA_SOLID_FOLDER").expect("MELDA_SOLID_FOLDER not set");
@@ -473,6 +482,9 @@ mod tests {
     #[test]
     #[serial]
     fn test_solid_read_object() {
+        if !std::env::var("MELDA_SOLID_URL").is_ok() {
+            return;
+        };
         check_env();
         let url = std::env::var("MELDA_SOLID_URL").expect("MELDA_SOLID_URL not set");
         let folder = std::env::var("MELDA_SOLID_FOLDER").expect("MELDA_SOLID_FOLDER not set");
@@ -501,6 +513,9 @@ mod tests {
     #[test]
     #[serial]
     fn test_solid_write_object() {
+        if !std::env::var("MELDA_SOLID_URL").is_ok() {
+            return;
+        };
         check_env();
         let url = std::env::var("MELDA_SOLID_URL").expect("MELDA_SOLID_URL not set");
         let folder = std::env::var("MELDA_SOLID_FOLDER").expect("MELDA_SOLID_FOLDER not set");
@@ -548,6 +563,9 @@ mod tests {
     #[test]
     #[serial]
     fn test_solid_list_objects() {
+        if !std::env::var("MELDA_SOLID_URL").is_ok() {
+            return;
+        };
         check_env();
         let url = std::env::var("MELDA_SOLID_URL").expect("MELDA_SOLID_URL not set");
         let folder = std::env::var("MELDA_SOLID_FOLDER").expect("MELDA_SOLID_FOLDER not set");
