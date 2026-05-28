@@ -94,10 +94,13 @@ impl Adapter for MemoryAdapter {
 
 #[cfg(test)]
 mod tests {
-    use crate::{adapter::Adapter, flate2adapter::Flate2Adapter};
+    use crate::adapter::Adapter;
+    #[cfg(feature = "flate2adapter")]
+    use crate::flate2adapter::Flate2Adapter;
 
     use super::MemoryAdapter;
 
+    #[cfg(feature = "flate2adapter")]
     #[test]
     fn test_memory_read_object_flate() {
         let sa = MemoryAdapter::new();
@@ -122,6 +125,7 @@ mod tests {
         assert!(ro == "om");
     }
 
+    #[cfg(feature = "flate2adapter")]
     #[test]
     fn test_memory_write_object_flate() {
         let sa = MemoryAdapter::new();
@@ -166,6 +170,7 @@ mod tests {
         assert!(ro == "otherdata");
     }
 
+    #[cfg(feature = "flate2adapter")]
     #[test]
     fn test_memory_list_objects_flate() {
         let sa = MemoryAdapter::new();

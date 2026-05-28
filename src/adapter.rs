@@ -31,16 +31,18 @@ use anyhow::Result;
 /// ```
 pub fn get_adapter(url: &str) -> Result<Box<dyn Adapter>> {
     let url = url::Url::parse(url).expect("invalid_url");
-    let username = if url.username().is_empty() {
+    let _username = if url.username().is_empty() {
         None
     } else {
         Some(url.username().to_string())
     };
-    let password = url.password().map(|s| s.to_string());
+    let _password = url.password().map(|s| s.to_string());
     let mut adapter: Option<Box<dyn Adapter>> = None;
     if url.scheme().starts_with("memory") {
         adapter = Some(Box::new(crate::memoryadapter::MemoryAdapter::new()));
-    } else if url.scheme().starts_with("file") {
+    }
+    #[cfg(feature = "filesystemadapter")]
+    if url.scheme().starts_with("file") {
         adapter = Some(Box::new(
             crate::filesystemadapter::FilesystemAdapter::new(url.path())
                 .expect("cannot_initialize_adapter"),
@@ -52,7 +54,7 @@ pub fn get_adapter(url: &str) -> Result<Box<dyn Adapter>> {
             crate::solidadapter::SolidAdapter::new(
                 "https://".to_string() + &url.host().unwrap().to_string(),
                 url.path().to_string() + "/",
-                username,
+                _username,
                 password,
             )
             .expect("cannot_initialize_adapter"),
@@ -70,12 +72,17 @@ pub fn get_adapter(url: &str) -> Result<Box<dyn Adapter>> {
     }
     match adapter {
         Some(adapter) => {
+            #[cfg(feature = "flate2adapter")]
             if url.scheme().ends_with("+flate") {
                 return Ok(Box::new(crate::flate2adapter::Flate2Adapter::new(
                     std::sync::Arc::new(std::sync::RwLock::new(adapter)),
                 )));
             }
-            #[cfg(feature = "brotli")]
+            #[cfg(not(feature = "flate2adapter"))]
+            if url.scheme().ends_with("+flate") {
+                anyhow::bail!("flate2adapter feature not enabled");
+            }
+            #[cfg(feature = "brotliadapter")]
             if url.scheme().ends_with("+brotli") {
                 return Ok(Box::new(crate::brotliadapter::BrotliAdapter::new(
                     std::sync::Arc::new(std::sync::RwLock::new(adapter)),

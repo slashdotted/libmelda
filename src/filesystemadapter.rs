@@ -162,10 +162,13 @@ impl Adapter for FilesystemAdapter {
 mod tests {
     use mktemp::Temp;
 
-    use crate::{adapter::Adapter, flate2adapter::Flate2Adapter};
+    use crate::adapter::Adapter;
+    #[cfg(feature = "flate2adapter")]
+    use crate::flate2adapter::Flate2Adapter;
 
     use super::FilesystemAdapter;
 
+    #[cfg(feature = "flate2adapter")]
     #[test]
     fn test_filesystem_read_object_flate() {
         let temp = Temp::new_dir().unwrap();
@@ -192,6 +195,7 @@ mod tests {
         assert!(ro == "om");
     }
 
+    #[cfg(feature = "flate2adapter")]
     #[test]
     fn test_filesystem_write_object_flate() {
         let temp = Temp::new_dir().unwrap();
@@ -238,6 +242,7 @@ mod tests {
         assert!(ro == "otherdata");
     }
 
+    #[cfg(feature = "flate2adapter")]
     #[test]
     fn test_filesystem_list_objects_flate() {
         let temp = Temp::new_dir().unwrap();

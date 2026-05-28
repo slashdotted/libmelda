@@ -18,7 +18,9 @@ pub mod adapter;
 pub mod brotliadapter;
 mod constants;
 mod datastorage;
+#[cfg(feature = "filesystemadapter")]
 pub mod filesystemadapter;
+#[cfg(feature = "flate2adapter")]
 pub mod flate2adapter;
 pub mod melda;
 pub mod memoryadapter;

@@ -144,10 +144,13 @@ impl Adapter for SqliteAdapter {
 
 #[cfg(test)]
 mod tests {
-    use crate::{adapter::Adapter, flate2adapter::Flate2Adapter};
+    use crate::adapter::Adapter;
+    #[cfg(feature = "flate2adapter")]
+    use crate::flate2adapter::Flate2Adapter;
 
     use super::SqliteAdapter;
 
+    #[cfg(feature = "flate2adapter")]
     #[test]
     fn test_sqlite_read_object_flate() {
         let sa = SqliteAdapter::new_in_memory();
@@ -172,6 +175,7 @@ mod tests {
         assert!(ro == "om");
     }
 
+    #[cfg(feature = "flate2adapter")]
     #[test]
     fn test_solid_write_object_flate() {
         let sa = SqliteAdapter::new_in_memory();
@@ -216,6 +220,7 @@ mod tests {
         assert!(ro == "otherdata");
     }
 
+    #[cfg(feature = "flate2adapter")]
     #[test]
     fn test_sqlite_list_objects_flate() {
         let sa = SqliteAdapter::new_in_memory();

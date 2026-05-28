@@ -189,9 +189,7 @@ impl PartialOrd for Revision {
 }
 
 /// Equality
-impl Eq for Revision {
-    fn assert_receiver_is_total_eq(&self) {}
-}
+impl Eq for Revision {}
 
 /// Full Ordering
 impl Ord for Revision {

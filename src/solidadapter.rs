@@ -345,11 +345,9 @@ mod tests {
     #[allow(unused_imports)]
     use serial_test::serial;
 
-    #[allow(unused_imports)]
-    use crate::{
-        adapter::Adapter, flate2adapter::Flate2Adapter, memoryadapter::MemoryAdapter,
-        solidadapter::SolidAdapter,
-    };
+    use crate::{adapter::Adapter, memoryadapter::MemoryAdapter, solidadapter::SolidAdapter};
+    #[cfg(feature = "flate2adapter")]
+    use crate::flate2adapter::Flate2Adapter;
 
     #[allow(dead_code)]
     fn check_env() {
@@ -359,6 +357,7 @@ mod tests {
         assert!(std::env::var("MELDA_SOLID_FOLDER").is_ok());
     }
 
+    #[cfg(feature = "flate2adapter")]
     #[test]
     #[serial]
     fn test_solid_read_object_flate() {
@@ -391,6 +390,7 @@ mod tests {
         assert!(ro == "om");
     }
 
+    #[cfg(feature = "flate2adapter")]
     #[test]
     #[serial]
     fn test_solid_write_object_flate() {
@@ -443,6 +443,7 @@ mod tests {
         assert!(ro == "otherdata");
     }
 
+    #[cfg(feature = "flate2adapter")]
     #[test]
     #[serial]
     fn test_solid_list_objects_flate() {

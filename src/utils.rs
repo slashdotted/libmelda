@@ -15,6 +15,7 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use yavomrs::yavom::{myers_unfilled, Move, Point};
 
@@ -54,9 +55,9 @@ pub fn digest_string(content: &str) -> String {
 
 /// Computes the digest of a slice of bytes
 pub fn digest_bytes(content: &[u8]) -> String {
-    let mut hasher = openssl::sha::Sha256::new();
+    let mut hasher = Sha256::new();
     hasher.update(content);
-    hex::encode(hasher.finish())
+    hex::encode(hasher.finalize())
 }
 
 /// Computes the digest of a JSON object
@@ -354,6 +355,8 @@ mod tests {
             digest_string("hello world")
                 == "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
         );
+        let expected = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        assert_eq!(digest_bytes(b"abc"), expected);
     }
 
     #[test]
