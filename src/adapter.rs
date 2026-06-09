@@ -55,7 +55,7 @@ pub fn get_adapter(url: &str) -> Result<Box<dyn Adapter>> {
                 "https://".to_string() + &url.host().unwrap().to_string(),
                 url.path().to_string() + "/",
                 _username,
-                password,
+                _password,
             )
             .expect("cannot_initialize_adapter"),
         ));
