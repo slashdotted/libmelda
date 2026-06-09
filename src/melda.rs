@@ -391,6 +391,7 @@ impl Melda {
     /// let object = json!({ "somekey" : [ "somedata", 1, 2, 3, 4 ] }).as_object().unwrap().clone();
     /// assert!(replica.create_object("myobject", object).is_ok());    
     /// let object = json!({ "somekey" : [ "somedata", 1, 2, 3, 4 ], "otherkey" : "otherdata" }).as_object().unwrap().clone();
+    /// let result = replica.update_object("myobject", object.clone());
     /// let result = replica.update_object("myobject", object);
     /// assert!(result.is_ok());
     /// assert_eq!(result.unwrap().unwrap(), "2-9e84b4db64036b29b7ad7def2efa95a11e1ffe93e6e5cf56e93b07ef8d3976ff_e5d1d20");
@@ -432,10 +433,10 @@ impl Melda {
                         drop(data_w);
                         Ok(Some(rev.to_string()))
                     } else {
-                        Ok(None)
+                        Ok(Some(winning_revision.to_string()))
                     }
                 } else {
-                    Err(anyhow!("invalid_object"))
+                    Ok(Some(winning_revision.to_string()))
                 }
             } else {
                 Err(anyhow!("object_has_no_winner"))
@@ -1384,6 +1385,7 @@ impl Melda {
     /// let adapter = Arc::new(RwLock::new(adapter));
     /// let mut replica = Melda::new(adapter.clone()).expect("cannot_initialize_crdt");
     /// let object = json!({ "somekey" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
+    /// replica.update(object.clone());
     /// replica.update(object.clone());
     /// let readback = replica.read(None).unwrap();
     /// assert!(readback.contains_key("somekey"));
@@ -2408,5 +2410,46 @@ impl Melda {
         } else {
             self.rebuild_array_order(base_revision, rt)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+    use crate::memoryadapter::MemoryAdapter;
+    use serde_json::json;
+    use std::sync::{Arc, RwLock};
+
+    #[test]
+    fn test_update_object() {
+        let adapter: Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+        let replica = Melda::new(Arc::new(RwLock::new(adapter))).expect("cannot_initialize_crdt");
+        let object = json!({ "somekey" : [ "somedata", 1, 2, 3, 4 ] })
+            .as_object()
+            .unwrap()
+            .clone();
+        assert!(replica.create_object("myobject", object).is_ok());
+        let object = json!({ "somekey" : [ "somedata", 1, 2, 3, 4 ], "otherkey" : "otherdata" })
+            .as_object()
+            .unwrap()
+            .clone();
+        let _result = replica.update_object("myobject", object.clone());
+        let result = replica.update_object("myobject", object);
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap().unwrap(),
+            "2-9e84b4db64036b29b7ad7def2efa95a11e1ffe93e6e5cf56e93b07ef8d3976ff_e5d1d20"
+        );
+        let object2 = json!({ "somekey" : [ "somedata", 1, 2, 3, 4 ], "otherkey" : "otherdata" })
+            .as_object()
+            .unwrap()
+            .clone();
+        let result = replica.update_object("myobject2", object2);
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap().unwrap(),
+            "1-9e84b4db64036b29b7ad7def2efa95a11e1ffe93e6e5cf56e93b07ef8d3976ff"
+        );
     }
 }
