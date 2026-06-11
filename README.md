@@ -6,6 +6,8 @@ There exist different types of CRDTs: operation-based CRDTs (which generate and 
 
 Melda natively supports the JSON data format and provides a way to synchronize changes made to arbitrary JSON documents. You can work with Melda CRDTs either using this Rust library or using a [command line tool](https://github.com/slashdotted/libmelda-tools/). In the [Kibi w/Melda](https://github.com/slashdotted/kibi) repository you can find a fork of the original [Kibi](https://github.com/ilai-deutel/kibi) text editor with collaboration features implemented using Melda.
 
+There is also a very early stage library, called [melda-sec](https://github.com/slashdotted/libmelda-sec) which implements a secure layer for Melda: delta blocks can be signed for additional security and changes to objects can be prevented using role based policies.
+
 
 # How do I use Melda?
 
@@ -18,7 +20,7 @@ melda = { git = "https://github.com/slashdotted/libmelda" }
 or
 
 ```
-melda = "0.4.2"
+melda = "0.5.2"
 ```
 
 If using the [crate](https://crates.io/crates/melda)  from [crates.io](https://crates.io/crates/melda) adapt the version string as needed. Then import the required modules. For this example you will need:
