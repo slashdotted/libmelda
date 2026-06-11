@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 use crate::adapter::Adapter;
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use std::{cell::RefCell, collections::BTreeMap, sync::Mutex};
 
 /// Implements in-memory storage
@@ -50,10 +50,18 @@ impl Adapter for MemoryAdapter {
     fn read_object(&self, key: &str, offset: usize, length: usize) -> Result<Vec<u8>> {
         let mem = self.data.lock().unwrap();
         let d = mem.borrow();
-        let data = d.get(key).unwrap();
+
+        let data = match d.get(key) {
+            Some(data) => data,
+            None => return Err(anyhow!("object not found: {}", key)),
+        };
+
         if offset == 0 && length == 0 {
             Ok(data.clone())
         } else {
+            if offset + length > data.len() {
+                return Err(anyhow!("invalid slice range for key: {}", key));
+            }
             Ok(data.as_slice()[offset..offset + length].to_vec())
         }
     }
