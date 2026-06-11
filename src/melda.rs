@@ -1241,8 +1241,17 @@ impl Melda {
             let this_items: HashSet<String> = this_items.into_iter().collect();
             for i in &other_items {
                 if !this_items.contains(i) {
-                    data.write_raw_item(i, other_data.read_raw_item(i, 0, 0)?.as_slice())?;
-                    result.push(i.clone());
+                    match other_data.read_raw_item(i, 0, 0) {
+                        Ok(bytes) => {
+                            if data.write_raw_item(i, bytes.as_slice()).is_err() {
+                                continue;
+                            }
+                            result.push(i.clone());
+                        }
+                        Err(_) => {
+                            continue;
+                        }
+                    }
                 }
             }
         }
