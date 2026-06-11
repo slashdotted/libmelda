@@ -696,8 +696,8 @@ impl Melda {
             block.insert(PARENTS_FIELD.to_string(), Value::from(anchors_blocks));
         }
         // Insert pack indentifer
-        if _packid.is_some() {
-            let packs = vec![_packid.unwrap()];
+        if let Some(pid) = _packid {
+            let packs = vec![pid];
             block.insert(PACK_FIELD.to_string(), Value::from(packs));
         }
         let blockstr = serde_json::to_string(&block).unwrap();
@@ -738,12 +738,7 @@ impl Melda {
     /// assert_eq!(replica.get_all_objects(), BTreeSet::from(["another".to_string(),"myobject".to_string()]));
     /// ```
     pub fn get_all_objects(&self) -> BTreeSet<String> {
-        self.documents
-            .read()
-            .unwrap()
-            .iter()
-            .map(|(k, _)| k.clone())
-            .collect()
+        self.documents.read().unwrap().keys().cloned().collect()
     }
 
     /// Returns a the value associated with the given revision
@@ -2041,7 +2036,7 @@ impl Melda {
     /// assert!(replica.has_staging());
     /// let stage = replica.stage().unwrap();
     /// let content = serde_json::to_string(&stage).unwrap();
-    /// assert_eq!(content,"{\"c\":[[\"^5dce0c82036c35bb319c8e5085004949a604475936bb5a9bb124a95fd793aa6c\",\"2-97b7a6993ee290384d32087608174bbab48de824406166f8b78c24a3bf1e1a1c_986c918\",\"bdb1432c17447b65ac69463ecbc9cde3b8945388dac19a52eb3a7c0c0d5ce7f8\"]],\"o\":{\"bdb1432c17447b65ac69463ecbc9cde3b8945388dac19a52eb3a7c0c0d5ce7f8\":{\"A\":[\"somedata2\",\"otherdata\"]}}}");
+    /// assert_eq!(content,"{\"c\":[[\"^√@somekey♭\",\"2-97b7a6993ee290384d32087608174bbab48de824406166f8b78c24a3bf1e1a1c_986c918\",\"bdb1432c17447b65ac69463ecbc9cde3b8945388dac19a52eb3a7c0c0d5ce7f8\"]],\"o\":{\"bdb1432c17447b65ac69463ecbc9cde3b8945388dac19a52eb3a7c0c0d5ce7f8\":{\"A\":[\"somedata2\",\"otherdata\"]}}}");
     /// replica.commit(None).unwrap();
     /// assert!(!replica.has_staging());
     /// replica.stage_full_snapshot().unwrap();

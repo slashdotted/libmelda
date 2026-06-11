@@ -186,7 +186,7 @@ pub fn flatten(
                             let array_descriptor_uuid = ARRAY_DESCRIPTOR_PREFIX.to_string()
                                 + &uuid
                                 + ARRAY_DESCRIPTOR_SEPARATOR
-                                + &k;
+                                + k;
                             c.insert(array_descriptor_uuid.clone(), array_descriptor_object);
                             (k.clone(), Value::from(array_descriptor_uuid))
                         } else {
@@ -314,7 +314,7 @@ pub fn apply_diff_patch(old: &mut Vec<Value>, patch: &[Value]) -> Result<()> {
                 .as_array()
                 .ok_or_else(|| anyhow!("invalid_patch_items_not_an_array"))?
                 .clone();
-            old.splice(index..index, items.into_iter());
+            old.splice(index..index, items);
         } else {
             return Err(anyhow!("invalid_patch_op"));
         }
@@ -519,10 +519,7 @@ mod tests {
             assert!(c.contains_key("foo"));
             assert!(c.contains_key("bar"));
             let content = serde_json::to_string(&c.get(ROOT_ID)).unwrap();
-            assert!(
-                content
-                    == r#"{"data♭":"^e13aaf01b21510d633e7e19d055f67c73f93a417d9b5a0099f76513f86dc6b00"}"#
-            );
+            assert!(content == r#"{"data♭":"^√@data♭"}"#);
             let content = serde_json::to_string(&c.get("foo")).unwrap();
             assert!(content == r#"{"value":1.23}"#);
             let content = serde_json::to_string(&c.get("bar")).unwrap();
@@ -565,10 +562,7 @@ mod tests {
             assert!(c.contains_key("foo"));
             assert!(c.contains_key("bar"));
             let content = serde_json::to_string(&c.get(ROOT_ID)).unwrap();
-            assert!(
-                content
-                    == r#"{"data♭":"^e13aaf01b21510d633e7e19d055f67c73f93a417d9b5a0099f76513f86dc6b00"}"#
-            );
+            assert_eq!(content, r#"{"data♭":"^√@data♭"}"#);
             let content = serde_json::to_string(&c.get("foo")).unwrap();
             assert!(content == r#"{"value":1.23}"#);
             let content = serde_json::to_string(&c.get("bar")).unwrap();

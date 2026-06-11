@@ -345,9 +345,9 @@ mod tests {
     #[allow(unused_imports)]
     use serial_test::serial;
 
-    use crate::{adapter::Adapter, memoryadapter::MemoryAdapter, solidadapter::SolidAdapter};
     #[cfg(feature = "flate2adapter")]
     use crate::flate2adapter::Flate2Adapter;
+    use crate::{adapter::Adapter, memoryadapter::MemoryAdapter, solidadapter::SolidAdapter};
 
     #[allow(dead_code)]
     fn check_env() {
