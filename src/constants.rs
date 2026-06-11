@@ -18,6 +18,8 @@
 pub const STRING_ESCAPE_PREFIX: &str = "!";
 ///  Suffix for array descriptors
 pub const ARRAY_DESCRIPTOR_PREFIX: &str = "^";
+///  Separator for array descriptors uuid (parent uuid at field id)
+pub const ARRAY_DESCRIPTOR_SEPARATOR: &str = "@";
 ///  Delta order field in array descriptors
 pub const ARRAY_DESCRIPTOR_ORDER_FIELD: &str = "A";
 ///  Delta order field in array descriptors

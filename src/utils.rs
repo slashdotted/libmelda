@@ -20,8 +20,9 @@ use std::collections::HashMap;
 use yavomrs::yavom::{myers_unfilled, Move, Point};
 
 use crate::constants::{
-    ARRAY_DESCRIPTOR_ORDER_FIELD, ARRAY_DESCRIPTOR_PREFIX, EMPTY_HASH, FLATTEN_SUFFIX, HASH_FIELD,
-    ID_FIELD, PATCH_DELETE, PATCH_INSERT, ROOT_ID, STRING_ESCAPE_PREFIX,
+    ARRAY_DESCRIPTOR_ORDER_FIELD, ARRAY_DESCRIPTOR_PREFIX, ARRAY_DESCRIPTOR_SEPARATOR, EMPTY_HASH,
+    FLATTEN_SUFFIX, HASH_FIELD, ID_FIELD, PATCH_DELETE, PATCH_INSERT, ROOT_ID,
+    STRING_ESCAPE_PREFIX,
 };
 
 /// Returns true if the key matches a flattened field
@@ -183,7 +184,9 @@ pub fn flatten(
                             array_descriptor_object
                                 .insert(ARRAY_DESCRIPTOR_ORDER_FIELD.to_string(), flattened);
                             let array_descriptor_uuid = ARRAY_DESCRIPTOR_PREFIX.to_string()
-                                + &digest_string(&fpath.join(""));
+                                + &uuid
+                                + ARRAY_DESCRIPTOR_SEPARATOR
+                                + &k;
                             c.insert(array_descriptor_uuid.clone(), array_descriptor_object);
                             (k.clone(), Value::from(array_descriptor_uuid))
                         } else {
