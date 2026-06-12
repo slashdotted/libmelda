@@ -98,13 +98,13 @@ Melda implements a modular design where the logic of the CRDT is separated from 
 
 We can initialize an adapter that will store data on the filesystem (in the **todolist** directory) as follows (**FilesystemAdapter**):
 ```rust
-let adapter = Box::new(FilesystemAdapter::new("todolist").expect("Cannot initialize adapter"));
+let adapter = FilesystemAdapter::new("todolist")?.into_dyn();
 ```
 
 If we want to used compression we would add the **Flate2Adapter** as follows:
 ```rust
-let adapter = Box::new(Flate2Adapter::new(Arc::new(RwLock::new(Box::new(
-            FilesystemAdapter::new("todolist").expect("Cannot initialize adapter"))))));
+let adapter = Flate2Adapter::new(
+    FilesystemAdapter::new("todolist")?
 ```
 
 Alternatively you can use the **get_adapter** function to initialize an adapter from an Url:
@@ -135,7 +135,8 @@ For [Solid](https://solidproject.org/) Pod's access, a username and a password a
 
 To initialize Melda we use the **new** method, passing the chosen adapter:
 ```rust
-let mut m = Melda::new(Arc::new(RwLock::new(adapter))).expect("Failed to inizialize Melda");
+let mut m = Melda::new(
+    FilesystemAdapter::new("todolist")?.into_dyn()
 ```
 or you can use an Url
 ```rust
@@ -229,10 +230,8 @@ Each object managed by Melda will contain the **_id** field with the correspondi
 
 We now suppose that Alice shares the current state of the  **todolist** directory with Bob (she can simply zip the contents and send the compressed file by e-mail to Bob). We assume that Bob saves the contents in the **todolist_bob** directory. Bob initializes Melda and can perform some updates:
 ```rust
-let adapter_bob =
-        Box::new(FilesystemAdapter::new("todolist_bob").expect("Cannot initialize adapter"));
-    let mut m_bob =
-        Melda::new(Arc::new(RwLock::new(adapter_bob))).expect("Failed to inizialize Melda");
+let mut m_bob = Melda::new(
+    FilesystemAdapter::new("todolist_bob")?.into_dyn()
 let v = json!({ "software" : "MeldaDo", "version" : "1.0.0", "items♭" : [
        {"_id" : "alice_todo_01", "title" : "Buy milk", "description" : "Go to the grocery store"},
        {"_id" : "bob_todo_01", "title" : "Pay bills", "description" : "Withdraw 500 to pay bill"},
