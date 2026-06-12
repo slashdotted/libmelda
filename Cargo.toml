@@ -1,6 +1,6 @@
 [package]
 name = "melda"
-version = "0.5.3"
+version = "0.5.4"
 authors = ["Amos Brocco <amos.brocco@supsi.ch>"]
 edition = "2018"
 license = "GPL-3.0"
@@ -52,8 +52,8 @@ flate2 = { version = "1.0", optional = true }
 default = ["filesystemadapter", "flate2adapter"]
 filesystemadapter = []
 flate2adapter = ["dep:flate2"]
-solid = ["dep:reqwest", "dep:rio_api", "dep:rio_turtle", "dep:oxiri", "dep:cacache"]
-sqlitedb = ["dep:rusqlite", "dep:base64"]
+solidadapter = ["dep:reqwest", "dep:rio_api", "dep:rio_turtle", "dep:oxiri", "dep:cacache"]
+sqlitedbadapter = ["dep:rusqlite", "dep:base64"]
 brotliadapter = ["dep:brotli"]
 
 [dev-dependencies]

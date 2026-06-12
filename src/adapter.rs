@@ -77,7 +77,7 @@ pub fn get_adapter(url: &str) -> Result<Box<dyn Adapter>> {
                 .expect("cannot_initialize_adapter"),
         ));
     }
-    #[cfg(feature = "solid")]
+    #[cfg(feature = "solidadapter")]
     if url.scheme().starts_with("solid") {
         adapter = Some(Box::new(
             crate::solidadapter::SolidAdapter::new(
@@ -89,7 +89,7 @@ pub fn get_adapter(url: &str) -> Result<Box<dyn Adapter>> {
             .expect("cannot_initialize_adapter"),
         ));
     }
-    #[cfg(feature = "sqlitedb")]
+    #[cfg(feature = "sqlitedbadapter")]
     if url.scheme().starts_with("sqlite") && !url.path().eq(":memory:") {
         adapter = Some(Box::new(crate::sqliteadapter::SqliteAdapter::new(
             url.path(),

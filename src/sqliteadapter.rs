@@ -13,10 +13,13 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
-use crate::adapter::Adapter;
+use crate::adapter::{Adapter, DynAdapter};
 use anyhow::Result;
 use base64::{engine::general_purpose, Engine as _};
-use std::{cell::RefCell, sync::Mutex};
+use std::{
+    cell::RefCell,
+    sync::{Arc, Mutex, RwLock},
+};
 
 /// Implements storage in a SQLite database
 pub struct SqliteAdapter {

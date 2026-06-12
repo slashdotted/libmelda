@@ -26,8 +26,8 @@ pub mod melda;
 pub mod memoryadapter;
 mod revision;
 mod revisiontree;
-#[cfg(feature = "solid")]
+#[cfg(feature = "solidadapter")]
 pub mod solidadapter;
-#[cfg(feature = "sqlitedb")]
+#[cfg(feature = "sqlitedbadapter")]
 pub mod sqliteadapter;
 mod utils;

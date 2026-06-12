@@ -13,7 +13,7 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
-use crate::adapter::Adapter;
+use crate::adapter::{Adapter, DynAdapter};
 use anyhow::{bail, Result};
 use cacache;
 use lru::LruCache;
@@ -27,7 +27,7 @@ use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, RwLock};
 use std::{collections::HashMap, env};
 use url::Url;
 
@@ -349,8 +349,11 @@ mod tests {
     #[allow(unused_imports)]
     use serial_test::serial;
 
+    #[allow(unused_imports)]
     #[cfg(feature = "flate2adapter")]
     use crate::flate2adapter::Flate2Adapter;
+    #[allow(unused_imports)]
+    #[cfg(feature = "solidadapter")]
     use crate::{adapter::Adapter, memoryadapter::MemoryAdapter, solidadapter::SolidAdapter};
 
     #[allow(dead_code)]

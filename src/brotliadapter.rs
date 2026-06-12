@@ -13,7 +13,7 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
-use crate::adapter::Adapter;
+use crate::adapter::{Adapter, DynAdapter};
 use anyhow::Result;
 use std::{
     io::Read,
@@ -31,7 +31,6 @@ impl<A: Adapter> BrotliAdapter<A> {
     /// # Arguments
     ///
     /// * `backend` - The adapter to be wrapped
-
     pub fn new(backend: A) -> Self {
         Self { backend }
     }
