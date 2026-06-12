@@ -21,22 +21,37 @@ use std::{
 };
 
 /// Implements compressed storage (using Brotli) on other adapters
-pub struct BrotliAdapter {
-    backend: Arc<RwLock<Box<dyn Adapter>>>,
+pub struct BrotliAdapter<A: Adapter> {
+    backend: A,
 }
 
-impl BrotliAdapter {
+impl<A: Adapter> BrotliAdapter<A> {
     /// Creates a new adapter wrapping the specified adapter
     ///
     /// # Arguments
     ///
     /// * `backend` - The adapter to be wrapped
-    pub fn new(backend: Arc<RwLock<Box<dyn Adapter>>>) -> Self {
-        BrotliAdapter { backend }
+
+    pub fn new(backend: A) -> Self {
+        Self { backend }
     }
 }
 
-impl Adapter for BrotliAdapter {
+/// A wrapper for a dynamic adapter that implements the Adapter trait
+impl BrotliAdapter<DynAdapter> {
+    pub fn new_dyn(backend: DynAdapter) -> Self {
+        Self { backend }
+    }
+}
+
+/// A wrapper for a dynamic adapter that implements the Adapter trait
+impl<A: Adapter + 'static> BrotliAdapter<A> {
+    pub fn into_dyn(self) -> DynAdapter {
+        Arc::new(RwLock::new(Box::new(self)))
+    }
+}
+
+impl<A: Adapter> Adapter for BrotliAdapter<A> {
     /// Reads an object or a sub-object from the backend storage. When offset and length are both 0
     /// the full object is returned, otherwise the sub-object is returned
     ///
@@ -48,7 +63,7 @@ impl Adapter for BrotliAdapter {
     ///     
     fn read_object(&self, key: &str, offset: usize, length: usize) -> Result<Vec<u8>> {
         let key = key.to_string() + ".brotli"; // Change key to avoid mismatching cache objects
-        let data = self.backend.read().unwrap().read_object(&key, 0, 0)?;
+        let data = self.backend.read_object(&key, 0, 0)?;
         let mut datavec = vec![];
         brotli::Decompressor::new(data.as_slice(), 4096).read_to_end(&mut datavec)?;
         if offset == 0 && length == 0 {
@@ -69,7 +84,7 @@ impl Adapter for BrotliAdapter {
         let mut compressor = brotli::CompressorReader::new(data, 4096, 11, 22);
         let mut buffer = vec![];
         compressor.read_to_end(&mut buffer)?;
-        self.backend.write().unwrap().write_object(&key, &buffer)
+        self.backend.write_object(&key, &buffer)
     }
 
     /// Lists the keys of all objects whose key ends with ext. If ext is an empty string, all objects are returned.
@@ -79,7 +94,7 @@ impl Adapter for BrotliAdapter {
     /// * `ext` - The extension (last part of the string) of the requested objects     
     fn list_objects(&self, ext: &str) -> Result<Vec<String>> {
         let ext = ext.to_string() + ".brotli"; // Change key to avoid mismatching cache objects
-        let result = self.backend.read().unwrap().list_objects(&ext)?;
+        let result = self.backend.list_objects(&ext)?;
         Ok(result
             .into_iter()
             .map(|k| k.trim_end_matches(".brotli").to_string())

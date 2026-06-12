@@ -13,13 +13,14 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
-use crate::adapter::Adapter;
+use crate::adapter::{Adapter, DynAdapter};
 use anyhow::{bail, Result};
 use std::{
     convert::TryInto,
     fs::{create_dir_all, metadata, read_dir, File},
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
+    sync::{Arc, RwLock},
 };
 
 /// Implements storage in a folder on the filesystem
@@ -28,6 +29,10 @@ pub struct FilesystemAdapter {
 }
 
 impl FilesystemAdapter {
+    pub fn into_dyn(self) -> DynAdapter {
+        Arc::new(RwLock::new(Box::new(self)))
+    }
+
     /// Creates a new adapter to store data in the specified directory
     ///
     /// # Arguments

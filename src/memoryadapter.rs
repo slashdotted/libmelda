@@ -13,9 +13,13 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
-use crate::adapter::Adapter;
+use crate::adapter::{Adapter, DynAdapter};
 use anyhow::{anyhow, Result};
-use std::{cell::RefCell, collections::BTreeMap, sync::Mutex};
+use std::{
+    cell::RefCell,
+    collections::BTreeMap,
+    sync::{Arc, Mutex, RwLock},
+};
 
 /// Implements in-memory storage
 pub struct MemoryAdapter {
@@ -23,6 +27,10 @@ pub struct MemoryAdapter {
 }
 
 impl MemoryAdapter {
+    pub fn into_dyn(self) -> DynAdapter {
+        Arc::new(RwLock::new(Box::new(self)))
+    }
+
     /// Creates a new adapter to store data in memory
     pub fn new() -> Self {
         MemoryAdapter {

@@ -48,6 +48,10 @@ pub enum ResourceType {
 }
 
 impl SolidAdapter {
+    pub fn into_dyn(self) -> DynAdapter {
+        Arc::new(RwLock::new(Box::new(self)))
+    }
+
     /// Creates a new adapter to store data in the specified Solid pod.
     /// If no username or password are provided the MELDA_SOLID_USERNAME and
     /// MELDA_SOLID_PASSWORD environment variables will be used.

@@ -3,7 +3,6 @@ use serde_json::json;
 use std::fs;
 use std::io;
 use std::path::Path;
-use std::sync::{Arc, RwLock};
 
 fn main() {
     // ensure clean state
@@ -11,12 +10,12 @@ fn main() {
     _ = std::fs::remove_dir_all("todolist_bob");
 
     // create alice storage adapter
-    let adapter_alice =
-        Box::new(FilesystemAdapter::new("todolist_alice").expect("Cannot initialize adapter"));
+    let adapter_alice = FilesystemAdapter::new("todolist_alice")
+        .expect("Cannot initialize adapter")
+        .into_dyn();
 
     // initialize CRDT data structure
-    let mut melda_alice =
-        Melda::new(Arc::new(RwLock::new(adapter_alice))).expect("Failed to inizialize Melda");
+    let mut melda_alice = Melda::new(adapter_alice).expect("Failed to inizialize Melda");
 
     // create new JSON object
     let v = json!({ "software" : "MeldaDo", "version" : "1.0.0", "items♭" : []})
@@ -66,11 +65,11 @@ fn main() {
 
     _ = copy_recursively("todolist_alice", "todolist_bob");
 
-    let adapter_bob =
-        Box::new(FilesystemAdapter::new("todolist_bob").expect("Cannot initialize adapter"));
+    let adapter_bob = FilesystemAdapter::new("todolist_bob")
+        .expect("Cannot initialize adapter")
+        .into_dyn();
 
-    let melda_bob =
-        Melda::new(Arc::new(RwLock::new(adapter_bob))).expect("Failed to inizialize Melda");
+    let melda_bob = Melda::new(adapter_bob).expect("Failed to inizialize Melda");
 
     // New version of the JSON object
     let v = json!(

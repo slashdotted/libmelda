@@ -24,6 +24,10 @@ pub struct SqliteAdapter {
 }
 
 impl SqliteAdapter {
+    pub fn into_dyn(self) -> DynAdapter {
+        Arc::new(RwLock::new(Box::new(self)))
+    }
+
     /// Creates a new adapter to store data in a SQLite database (on disk).
     ///
     /// # Arguments

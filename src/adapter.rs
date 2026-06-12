@@ -1,3 +1,5 @@
+use std::sync::{Arc, RwLock};
+
 // Melda - Delta State JSON CRDT
 // Copyright (C) 2021-2025 Amos Brocco <amos.brocco@supsi.ch>
 //
@@ -14,6 +16,33 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 use anyhow::Result;
+
+pub type DynAdapter = Arc<RwLock<Box<dyn Adapter>>>;
+
+/// A wrapper for a dynamic adapter that implements the Adapter trait
+/// This allows to use a dynamic adapter as a static adapter
+impl Adapter for DynAdapter {
+    fn read_object(&self, key: &str, offset: usize, length: usize) -> Result<Vec<u8>> {
+        self.read().unwrap().read_object(key, offset, length)
+    }
+
+    fn write_object(&self, key: &str, data: &[u8]) -> Result<()> {
+        self.write().unwrap().write_object(key, data)
+    }
+
+    fn list_objects(&self, ext: &str) -> Result<Vec<String>> {
+        self.read().unwrap().list_objects(ext)
+    }
+}
+
+/// A trait for adapters that can be converted into a dynamic adapter
+pub trait IntoDynAdapter: Adapter + Sized + 'static {
+    fn into_dyn(self) -> DynAdapter {
+        Arc::new(RwLock::new(Box::new(self)))
+    }
+}
+
+impl<T: Adapter + Sized + 'static> IntoDynAdapter for T {}
 
 /// Initializes an adapter using the provided Url
 ///
