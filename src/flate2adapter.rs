@@ -57,6 +57,10 @@ impl<A: Adapter + 'static> Adapter for Flate2Adapter<A> {
         self
     }
 
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
     /// Reads an object or a sub-object from the backend storage. When offset and length are both 0
     /// the full object is returned, otherwise the sub-object is returned
     ///

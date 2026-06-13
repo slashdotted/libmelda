@@ -40,6 +40,10 @@ impl Adapter for DynAdapter {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
 }
 
 /// A trait for adapters that can be converted into a dynamic adapter
@@ -133,6 +137,7 @@ pub fn get_adapter(url: &str) -> Result<Box<dyn Adapter>> {
 /// An adapter implements a storage backend for delta states
 pub trait Adapter: Send + Sync {
     fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 
     /// Reads an object or a sub-object from the backend storage. When offset and length are both 0
     /// the full object is returned, otherwise the sub-object is returned
