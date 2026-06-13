@@ -17,6 +17,7 @@ use crate::adapter::{Adapter, DynAdapter};
 use anyhow::Result;
 use flate2::{read::DeflateDecoder, write::DeflateEncoder, Compression};
 use std::{
+    any::Any,
     io::{Read, Write},
     sync::{Arc, RwLock},
 };
@@ -51,7 +52,11 @@ impl<A: Adapter + 'static> Flate2Adapter<A> {
     }
 }
 
-impl<A: Adapter> Adapter for Flate2Adapter<A> {
+impl<A: Adapter + 'static> Adapter for Flate2Adapter<A> {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     /// Reads an object or a sub-object from the backend storage. When offset and length are both 0
     /// the full object is returned, otherwise the sub-object is returned
     ///

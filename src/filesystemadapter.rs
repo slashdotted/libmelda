@@ -16,6 +16,7 @@
 use crate::adapter::{Adapter, DynAdapter};
 use anyhow::{bail, Result};
 use std::{
+    any::Any,
     convert::TryInto,
     fs::{create_dir_all, metadata, read_dir, File},
     io::{Read, Seek, SeekFrom, Write},
@@ -76,6 +77,10 @@ impl FilesystemAdapter {
 }
 
 impl Adapter for FilesystemAdapter {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     /// Reads an object or a sub-object from the backend storage. When offset and length are both 0
     /// the full object is returned, otherwise the sub-object is returned
     ///

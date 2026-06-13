@@ -23,6 +23,7 @@ use reqwest::header::HeaderMap;
 use rio_api::model::NamedNode;
 use rio_api::parser::TriplesParser;
 use rio_turtle::{TurtleError, TurtleParser};
+use std::any::Any;
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
@@ -276,6 +277,10 @@ impl SolidAdapter {
 }
 
 impl Adapter for SolidAdapter {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     /// Reads an object or a sub-object from the backend storage. When offset and length are both 0
     /// the full object is returned, otherwise the sub-object is returned
     ///

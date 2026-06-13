@@ -1,4 +1,7 @@
-use std::sync::{Arc, RwLock};
+use std::{
+    any::Any,
+    sync::{Arc, RwLock},
+};
 
 // Melda - Delta State JSON CRDT
 // Copyright (C) 2021-2025 Amos Brocco <amos.brocco@supsi.ch>
@@ -32,6 +35,10 @@ impl Adapter for DynAdapter {
 
     fn list_objects(&self, ext: &str) -> Result<Vec<String>> {
         self.read().unwrap().list_objects(ext)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 
@@ -125,6 +132,8 @@ pub fn get_adapter(url: &str) -> Result<Box<dyn Adapter>> {
 
 /// An adapter implements a storage backend for delta states
 pub trait Adapter: Send + Sync {
+    fn as_any(&self) -> &dyn Any;
+
     /// Reads an object or a sub-object from the backend storage. When offset and length are both 0
     /// the full object is returned, otherwise the sub-object is returned
     ///

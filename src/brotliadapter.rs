@@ -16,6 +16,7 @@
 use crate::adapter::{Adapter, DynAdapter};
 use anyhow::Result;
 use std::{
+    any::Any,
     io::Read,
     sync::{Arc, RwLock},
 };
@@ -50,7 +51,11 @@ impl<A: Adapter + 'static> BrotliAdapter<A> {
     }
 }
 
-impl<A: Adapter> Adapter for BrotliAdapter<A> {
+impl<A: Adapter + 'static> Adapter for BrotliAdapter<A> {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     /// Reads an object or a sub-object from the backend storage. When offset and length are both 0
     /// the full object is returned, otherwise the sub-object is returned
     ///
