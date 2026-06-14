@@ -33,6 +33,7 @@ pub struct DataStorage {
     committed_objects: HashMap<String, (String, usize, usize)>,
     loaded_packs: BTreeSet<String>,
     cache: Mutex<LruCache<String, Map<String, Value>>>,
+    allow_indices: bool,
 }
 
 impl DataStorage {
@@ -50,6 +51,7 @@ impl DataStorage {
             cache: Mutex::new(LruCache::<String, Map<String, Value>>::new(
                 NonZeroUsize::new(cache_size).unwrap(),
             )),
+            allow_indices: false, // FIXME: indices are disabled for now, because they can be malicious and point to non-existing packs or wrong offsets
         }
     }
 
@@ -120,25 +122,41 @@ impl DataStorage {
 
     /// Reloads the storage
     /// TODO: This can be partially replaced by a call to refresh
+    /// FIXME: Indices have been disabled to avoid issues with malicious indices,
+    /// but this will make the reload slower
     pub fn reload(&mut self) -> Result<Vec<String>> {
         if !self.stage.is_empty() {
             bail!("non_empty_data_stage");
         }
         self.loaded_packs.clear();
         self.committed_objects.clear();
-        let pack_list = self.adapter.read().unwrap().list_objects(PACK_EXTENSION)?;
-        let index_list = self.adapter.read().unwrap().list_objects(INDEX_EXTENSION)?;
-        let index_set = index_list.into_iter().collect::<HashSet<_>>();
-        if !pack_list.is_empty() {
-            for i in &pack_list {
-                if index_set.contains(i) {
-                    self.load_index(i)?;
-                } else {
+        if self.allow_indices {
+            let pack_list = self.adapter.read().unwrap().list_objects(PACK_EXTENSION)?;
+            let index_list = self.adapter.read().unwrap().list_objects(INDEX_EXTENSION)?;
+            let index_set = index_list.into_iter().collect::<HashSet<_>>();
+            if !pack_list.is_empty() {
+                for i in &pack_list {
+                    if index_set.contains(i) {
+                        // If the index is available, load it (it will also load the pack)
+                        // This is more efficient than loading the pack and then the index, because the index is smaller
+                        // but if the index is malicious, it can point to a pack that is not valid, so we need to check the pack anyway
+                        // For example, an index can say that a digest exists or is at a certain offset, but the pack can be missing or the digest can be different
+                        self.load_index(i)?;
+                    } else {
+                        self.load_pack(i)?;
+                    }
+                }
+            }
+            Ok(pack_list)
+        } else {
+            let pack_list = self.adapter.read().unwrap().list_objects(PACK_EXTENSION)?;
+            if !pack_list.is_empty() {
+                for i in &pack_list {
                     self.load_pack(i)?;
                 }
             }
+            Ok(pack_list)
         }
-        Ok(pack_list)
     }
 
     pub fn get_loaded_packs(&self) -> &BTreeSet<String> {
@@ -180,6 +198,17 @@ impl DataStorage {
                 Ok(d.eq(pack))
             }
             Err(e) => Err(e),
+        }
+    }
+
+    /// Returns true if the revision is available and valid (digest matches)
+    pub fn is_readable_and_valid_revision(&self, rev: &Revision) -> bool {
+        if rev.is_empty() || rev.is_deleted() || rev.is_resolved() || rev.is_charcode() {
+            true
+        } else if !self.allow_indices {
+            self.committed_objects.contains_key(rev.digest())
+        } else {
+            matches!(self.read_object(rev), Ok(_obj))
         }
     }
 

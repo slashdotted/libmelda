@@ -2255,6 +2255,29 @@ impl Melda {
                     status = Status::Invalid;
                 }
             };
+            // Verify that if changesets contain update records the block has at least one parent
+            if let Some(changes) = &block.read().unwrap().changes {
+                if changes.iter().any(|change| change.2.is_some()) {
+                    if block.read().unwrap().parents.is_none() {
+                        status = Status::Invalid;
+                    }
+                }
+            };      
+            // Verify that all changes are referencing revisions that are available in the data store
+            if let Some(changes) = &block.read().unwrap().changes {
+                if !changes.par_iter().all(|change| {
+                    if let Some(rev) = &change.2 {
+                        data.is_readable_and_valid_revision(rev)
+                            && data.is_readable_and_valid_revision(&change.1)
+                    } else {
+                        data.is_readable_and_valid_revision(&change.1)
+                    }
+                }) {
+                    status = Status::Invalid;
+                };
+            };
+            // TODO: Verify that the changes are consistent with the parent blocks (e.g. if a change is an update record, verify that the parent block contains a creation or update record for the same uuid and the referenced revision is correct)
+            // This is currently not implemented to avoid expensive recursive checks, but it should be implemented in the future to ensure that blocks are not referencing revisions that are not actually introduced in the parent blocks
             if status == Status::Valid {
                 // Verify that all parent blocks are status
                 if let Some(parents) = &block.read().unwrap().parents {
