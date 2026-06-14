@@ -2275,10 +2275,10 @@ impl Melda {
             };
             // Verify that if changesets contain update records the block has at least one parent
             if let Some(changes) = &block.read().unwrap().changes {
-                if changes.iter().any(|change| change.2.is_some()) {
-                    if block.read().unwrap().parents.is_none() {
-                        status = Status::Invalid;
-                    }
+                if changes.iter().any(|change| change.2.is_some())
+                    && block.read().unwrap().parents.is_none()
+                {
+                    status = Status::Invalid;
                 }
             };
             // Verify that all changes are referencing revisions that are available in the data store

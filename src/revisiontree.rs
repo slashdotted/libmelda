@@ -15,7 +15,7 @@
 // along with this program.  If not,ls see <http://www.gnu.org/licenses/>.
 use crate::revision::Revision;
 use impl_tools::autoimpl;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 #[autoimpl(PartialEq, Eq, PartialOrd, Ord ignore self.staging)]
 #[autoimpl(Debug, Clone)]
@@ -50,7 +50,7 @@ pub enum ValidationState {
 
 #[derive(Debug, Clone)]
 pub struct RevisionTree {
-    revisions: BTreeMap<Revision, RevisionTreeEntry>,
+    revisions: HashMap<Revision, RevisionTreeEntry>,
     staging: bool,
 
     // Cache
@@ -63,7 +63,7 @@ pub struct RevisionTree {
 impl RevisionTree {
     pub fn new() -> Self {
         Self {
-            revisions: BTreeMap::new(),
+            revisions: HashMap::new(),
             staging: false,
             leafs_cache: BTreeSet::new(),
             winner_cache: None,
@@ -102,62 +102,81 @@ impl RevisionTree {
         self.leafs_cache.clear();
         self.winner_cache = None;
 
-        let mut validity_cache = std::collections::HashMap::new();
+        let mut validity_cache: HashMap<*const Revision, bool> = HashMap::new();
+        let mut best: Option<Revision> = None;
 
         let parents: HashSet<&Revision> = self
             .revisions
             .values()
             .filter_map(|e| e.get_parent().as_ref())
-            .filter(|p| self.revisions.contains_key(*p))
             .collect();
 
-        let mut new_leafs = Vec::new();
-
+        // The validation algoritm ensures that leafs have a "connection"
+        // with a root revision (no parent, index = 1)
         for r in self.revisions.keys() {
-            if parents.contains(r) || r.is_resolved() {
+            if r.is_resolved() {
+                // resolved revisions cannot be leafs
                 continue;
             }
 
+            if parents.contains(r) {
+                // parents cannot be leafs, by definition
+                continue;
+            }
+
+            // Checks if the candidate leaf revision has a path to
+            // a root revision
             if self.is_valid_cached(r, &mut validity_cache) {
-                new_leafs.push(r.clone());
+                let r_clone = r.clone();
+
+                self.leafs_cache.insert(r_clone.clone());
+
+                if best.as_ref().is_none_or(|b| &r_clone > b) {
+                    best = Some(r_clone);
+                }
             }
         }
 
-        self.leafs_cache.extend(new_leafs);
-
-        self.winner_cache = self.leafs_cache.iter().max().cloned();
+        self.winner_cache = best;
         self.state = ValidationState::Validated;
     }
 
     fn is_valid_cached<'a>(
         &'a self,
         rev: &'a Revision,
-        cache: &mut HashMap<&'a Revision, bool>,
+        cache: &mut HashMap<*const Revision, bool>,
     ) -> bool {
-        if let Some(&v) = cache.get(rev) {
-            return v;
-        }
         let mut path = Vec::new();
         let mut r = rev;
+
         let result = loop {
-            if let Some(&v) = cache.get(r) {
+            let key = r as *const Revision;
+
+            if let Some(&v) = cache.get(&key) {
                 break v;
             }
+
             path.push(r);
+
             let entry = match self.revisions.get(r) {
                 Some(e) => e,
                 None => break false,
             };
+
+            // root revision
             if r.index() == 1 && entry.get_parent().is_none() {
                 break true;
             }
+
             match entry.get_parent() {
                 Some(p) => r = p,
                 None => break false,
             }
         };
+
+        // Cache the result (only benefits situations with forks)
         for node in path {
-            cache.insert(node, result);
+            cache.insert(node as *const Revision, result);
         }
 
         result
@@ -181,7 +200,7 @@ impl RevisionTree {
         }
     }
 
-    pub fn get_revisions(&self) -> &BTreeMap<Revision, RevisionTreeEntry> {
+    pub fn get_revisions(&self) -> &HashMap<Revision, RevisionTreeEntry> {
         &self.revisions
     }
 
