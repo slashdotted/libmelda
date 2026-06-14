@@ -927,6 +927,12 @@ impl Melda {
                 }
             }
         });
+        let all_docs = self.documents.read().unwrap();
+        let rtrees: Vec<_> = all_docs.values().collect();
+        rtrees.par_iter().for_each(|mtx| {
+            let mut tree = mtx.lock().unwrap();
+            tree.validate();
+        });
         Ok(())
     }
 
@@ -1026,6 +1032,12 @@ impl Melda {
             }
         });
         drop(blocks_r);
+        let all_docs = self.documents.read().unwrap();
+        let rtrees: Vec<_> = all_docs.values().collect();
+        rtrees.par_iter().for_each(|mtx| {
+            let mut tree = mtx.lock().unwrap();
+            tree.validate();
+        });
         Ok(())
     }
 
@@ -1146,6 +1158,12 @@ impl Melda {
                 block_w.changes = None;
             }
         }
+        let all_docs = self.documents.read().unwrap();
+        let rtrees: Vec<_> = all_docs.values().collect();
+        rtrees.par_iter().for_each(|mtx| {
+            let mut tree = mtx.lock().unwrap();
+            tree.validate();
+        });
         Ok(())
     }
 
@@ -2262,7 +2280,7 @@ impl Melda {
                         status = Status::Invalid;
                     }
                 }
-            };      
+            };
             // Verify that all changes are referencing revisions that are available in the data store
             if let Some(changes) = &block.read().unwrap().changes {
                 if !changes.par_iter().all(|change| {
@@ -2276,8 +2294,8 @@ impl Melda {
                     status = Status::Invalid;
                 };
             };
-            // TODO: Verify that the changes are consistent with the parent blocks (e.g. if a change is an update record, verify that the parent block contains a creation or update record for the same uuid and the referenced revision is correct)
-            // This is currently not implemented to avoid expensive recursive checks, but it should be implemented in the future to ensure that blocks are not referencing revisions that are not actually introduced in the parent blocks
+            // Note: causal consistency is verified by validating revision trees. Only updates that trace back
+            // to an initial (creation) revision are kept
             if status == Status::Valid {
                 // Verify that all parent blocks are status
                 if let Some(parents) = &block.read().unwrap().parents {
@@ -2319,7 +2337,7 @@ impl Melda {
                     .or_insert_with(|| Mutex::new(RevisionTree::new()))
                     .get_mut()
                     .expect("cannot_acquire_revision_tree_for_writing");
-                rt_w.add(r.clone(), prev.clone(), false);
+                rt_w.unvalidated_add(r.clone(), prev.clone(), false);
             }
         };
         Ok(())

@@ -15,32 +15,26 @@
 // along with this program.  If not,ls see <http://www.gnu.org/licenses/>.
 use crate::revision::Revision;
 use impl_tools::autoimpl;
-use std::{
-    cell::Cell,
-    collections::{BTreeMap, BTreeSet, HashSet},
-};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 #[autoimpl(PartialEq, Eq, PartialOrd, Ord ignore self.staging)]
 #[autoimpl(Debug, Clone)]
 pub struct RevisionTreeEntry {
     parent: Option<Revision>,
-    staging: Cell<bool>,
+    staging: bool,
 }
 
 impl RevisionTreeEntry {
-    pub fn new(parent: Option<Revision>, staging: bool) -> RevisionTreeEntry {
-        RevisionTreeEntry {
-            parent,
-            staging: Cell::new(staging),
-        }
+    pub fn new(parent: Option<Revision>, staging: bool) -> Self {
+        Self { parent, staging }
     }
 
     pub fn is_staging(&self) -> bool {
-        self.staging.get()
+        self.staging
     }
 
-    pub fn commit(&self) {
-        self.staging.set(false);
+    pub fn commit(&mut self) {
+        self.staging = false;
     }
 
     pub fn get_parent(&self) -> &Option<Revision> {
@@ -48,125 +42,183 @@ impl RevisionTreeEntry {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValidationState {
+    Validated,
+    NonValidated,
+}
 
+#[derive(Debug, Clone)]
 pub struct RevisionTree {
     revisions: BTreeMap<Revision, RevisionTreeEntry>,
     staging: bool,
-    leafs: BTreeSet<Revision>,        // Revisions that are not parents
-    ghost_parents: HashSet<Revision>, // Revisions that are parents but are not in revisions
+
+    // Cache
+    leafs_cache: BTreeSet<Revision>,
+    winner_cache: Option<Revision>,
+
+    state: ValidationState,
 }
 
 impl RevisionTree {
-    /// Constructs a new Revision Tree
-    pub fn new() -> RevisionTree {
-        RevisionTree {
-            revisions: BTreeMap::<Revision, RevisionTreeEntry>::new(),
+    pub fn new() -> Self {
+        Self {
+            revisions: BTreeMap::new(),
             staging: false,
-            leafs: BTreeSet::<Revision>::new(),
-            ghost_parents: HashSet::<Revision>::new(),
+            leafs_cache: BTreeSet::new(),
+            winner_cache: None,
+            state: ValidationState::Validated,
         }
     }
 
-    /// Add new revision, parent tuple
-    /// This method returns true if the pair has been added, false if it already exists
+    pub fn unvalidated_add(
+        &mut self,
+        revision: Revision,
+        parent: Option<Revision>,
+        staging: bool,
+    ) -> bool {
+        if self.revisions.contains_key(&revision) {
+            return false;
+        }
+
+        self.revisions
+            .insert(revision, RevisionTreeEntry::new(parent, staging));
+
+        self.staging |= staging;
+        self.state = ValidationState::NonValidated;
+
+        true
+    }
+
     pub fn add(&mut self, revision: Revision, parent: Option<Revision>, staging: bool) -> bool {
-        // Insert the new revision information
-        if self
-            .revisions
-            .insert(
-                revision.clone(),
-                RevisionTreeEntry::new(parent.clone(), staging),
-            )
-            .is_none()
-        {
-            // If the revision was a ghost parent it is not anymore
-            if !self.ghost_parents.remove(&revision) {
-                // The revision is not a parent, therefore it can be considered as a leaf
-                // if it's not resolved
-                if !revision.is_resolved() {
-                    self.leafs.insert(revision);
+        let result = self.unvalidated_add(revision, parent, staging);
+        if result {
+            self.validate();
+        }
+        result
+    }
+
+    pub fn validate(&mut self) {
+        self.leafs_cache.clear();
+        self.winner_cache = None;
+        let mut parents = HashSet::new();
+        for entry in self.revisions.values() {
+            if let Some(p) = entry.get_parent() {
+                if self.revisions.contains_key(p) {
+                    parents.insert(p.clone());
                 }
             }
-            // Store the parent information
-            if let Some(p) = parent {
-                // If the parent is an unknown revision, store it as ghost parent
-                if !self.revisions.contains_key(&p) {
-                    self.ghost_parents.insert(p.clone());
-                } else {
-                    // Otherwise be sure that it's not considered a leaf
-                    self.leafs.remove(&p);
-                }
+        }
+        for r in self.revisions.keys() {
+            if parents.contains(r) {
+                continue;
             }
-            self.staging |= staging;
-            true
-        } else {
-            false
+            if r.is_resolved() {
+                continue;
+            }
+            if self.is_valid(r) {
+                self.leafs_cache.insert(r.clone());
+            }
+        }
+        self.winner_cache = self.leafs_cache.iter().max().cloned();
+        self.state = ValidationState::Validated;
+    }
+
+    fn is_valid(&self, rev: &Revision) -> bool {
+        let mut r = rev;
+        loop {
+            let entry = match self.revisions.get(r) {
+                Some(e) => e,
+                None => return false,
+            };
+            if r.index() == 1 && entry.get_parent().is_none() {
+                return true;
+            }
+            match entry.get_parent() {
+                Some(p) => r = p,
+                None => return false,
+            }
         }
     }
 
-    /// Returns the winning revision
+    pub fn get_leafs(&self) -> &BTreeSet<Revision> {
+        match self.state {
+            ValidationState::Validated => &self.leafs_cache,
+            ValidationState::NonValidated => {
+                panic!("revisiontree_not_validated")
+            }
+        }
+    }
+
     pub fn get_winner(&self) -> Option<&Revision> {
-        match self.revisions.iter().max() {
-            Some(rte) => Some(rte.0),
-            None => None,
+        match self.state {
+            ValidationState::Validated => self.winner_cache.as_ref(),
+            ValidationState::NonValidated => {
+                panic!("revisiontree_not_validated")
+            }
         }
     }
 
-    /// Returns a reference to the internal set
     pub fn get_revisions(&self) -> &BTreeMap<Revision, RevisionTreeEntry> {
         &self.revisions
     }
 
-    /// Check if the revision tree is empty
     pub fn is_empty(&self) -> bool {
         self.revisions.is_empty()
     }
 
-    /// Commits staged changes (resets staging flag)
     pub fn commit(&mut self) {
-        if self.staging {
-            self.revisions.iter().for_each(|rte| {
-                rte.1.commit();
-            });
-            self.staging = false;
+        match self.state {
+            ValidationState::Validated => {
+                if self.staging {
+                    for entry in self.revisions.values_mut() {
+                        entry.commit();
+                    }
+                    self.staging = false;
+                }
+            }
+            ValidationState::NonValidated => {
+                panic!("revisiontree_not_validated")
+            }
         }
     }
 
-    /// Abort staged changes
     pub fn unstage(&mut self) {
         if self.staging {
-            self.revisions.retain(|_, rte| !rte.staging.get());
+            self.revisions.retain(|_, entry| !entry.is_staging());
             self.staging = false;
+            self.state = ValidationState::NonValidated;
         }
+        self.validate();
     }
 
-    /// Returns wheter there are outstanding changes to commit
     pub fn has_staging(&self) -> bool {
         self.staging
     }
 
-    /// Returns leafs revisions
-    pub fn get_leafs(&self) -> &BTreeSet<Revision> {
-        &self.leafs
-    }
-
-    /// Returns the parent of a revision
     pub fn get_parent(&self, revision: &Revision) -> Option<&Revision> {
-        self.revisions.iter().find_map(|(rev, rte)| {
-            if rev == revision {
-                match &rte.parent {
-                    Some(parent) => Some(parent),
-                    None => None,
-                }
-            } else {
-                None
-            }
-        })
+        self.revisions.get(revision)?.get_parent().as_ref()
     }
 }
 
 mod tests {
+    #[test]
+    #[should_panic]
+    fn test_unvalidated_revision_tree() {
+        let mut rt = super::RevisionTree::new();
+        rt.add(
+            crate::revision::Revision::from("3-abc_cde").unwrap(),
+            crate::revision::Revision::from("2-abc_cde").ok(),
+            true,
+        );
+        rt.unvalidated_add(
+            crate::revision::Revision::from("3-xyz_cde").unwrap(),
+            crate::revision::Revision::from("2-abc_cde").ok(),
+            true,
+        );
+        let _ = rt.get_winner();
+    }
+
     #[test]
     fn test_winner() {
         let mut rt = super::RevisionTree::new();
@@ -200,57 +252,96 @@ mod tests {
             crate::revision::Revision::from("1-abc").ok(),
             true,
         );
+        rt.validate();
         let w = rt.get_winner().unwrap();
         assert!(w.to_string() == "3-xyz_cde");
     }
 
     #[test]
     fn test_leafs() {
-        let mut rt = super::RevisionTree::new();
-        rt.add(
-            crate::revision::Revision::from("3-abc_cde").unwrap(),
-            crate::revision::Revision::from("2-abc_cde").ok(),
-            true,
-        );
-        rt.add(
-            crate::revision::Revision::from("3-xyz_cde").unwrap(),
-            crate::revision::Revision::from("2-abc_cde").ok(),
-            true,
-        );
-        rt.add(
-            crate::revision::Revision::from("3-aaa_cde").unwrap(),
-            crate::revision::Revision::from("2-abc_cde").ok(),
-            true,
-        );
-        rt.add(
-            crate::revision::Revision::from("4-r_cde").unwrap(),
-            crate::revision::Revision::from("3-aaa_cde").ok(),
-            true,
-        );
-        rt.add(
-            crate::revision::Revision::from("4-xyz_cde").unwrap(),
-            crate::revision::Revision::from("3-xyz_cde").ok(),
-            true,
-        );
-        rt.add(
-            crate::revision::Revision::from("1-abc").unwrap(),
-            None,
-            true,
-        );
-        rt.add(
-            crate::revision::Revision::from("2-abc_cde").unwrap(),
-            crate::revision::Revision::from("1-abc").ok(),
-            true,
-        );
-        let l = rt.get_leafs();
-        assert!(l.len() == 2);
-        assert!(l.contains(&crate::revision::Revision::from("3-abc_cde").unwrap()));
-        assert!(l.contains(&crate::revision::Revision::from("4-xyz_cde").unwrap()));
-        // Verify order
-        let lvec: Vec<&super::Revision> = l.into_iter().collect();
-        assert!(*lvec[0] == crate::revision::Revision::from("3-abc_cde").unwrap());
-        assert!(*lvec[1] == crate::revision::Revision::from("4-xyz_cde").unwrap());
-        let w = rt.get_winner().unwrap();
-        assert!(lvec[1] == w);
+        {
+            let mut rt = super::RevisionTree::new();
+            rt.add(
+                crate::revision::Revision::from("3-abc_cde").unwrap(),
+                crate::revision::Revision::from("2-abc_cde").ok(),
+                true,
+            );
+            rt.add(
+                crate::revision::Revision::from("3-aaa_cde").unwrap(),
+                crate::revision::Revision::from("2-abc_cde").ok(),
+                true,
+            );
+            rt.add(
+                crate::revision::Revision::from("4-r_cde").unwrap(),
+                crate::revision::Revision::from("3-aaa_cde").ok(),
+                true,
+            );
+            rt.add(
+                crate::revision::Revision::from("4-xyz_cde").unwrap(),
+                crate::revision::Revision::from("3-xyz_cde").ok(),
+                true,
+            );
+            rt.add(
+                crate::revision::Revision::from("1-abc").unwrap(),
+                None,
+                true,
+            );
+            rt.add(
+                crate::revision::Revision::from("2-abc_cde").unwrap(),
+                crate::revision::Revision::from("1-abc").ok(),
+                true,
+            );
+            rt.validate();
+            let l = rt.get_leafs();
+            assert!(l.len() == 1);
+            assert!(l.contains(&crate::revision::Revision::from("3-abc_cde").unwrap()));
+            let w = rt.get_winner().unwrap();
+            assert_eq!(&crate::revision::Revision::from("3-abc_cde").unwrap(), w);
+        }
+        {
+            let mut rt = super::RevisionTree::new();
+            rt.add(
+                crate::revision::Revision::from("3-abc_cde").unwrap(),
+                crate::revision::Revision::from("2-abc_cde").ok(),
+                true,
+            );
+            rt.add(
+                crate::revision::Revision::from("3-xyz_cde").unwrap(),
+                crate::revision::Revision::from("2-abc_cde").ok(),
+                true,
+            );
+            rt.add(
+                crate::revision::Revision::from("3-aaa_cde").unwrap(),
+                crate::revision::Revision::from("2-abc_cde").ok(),
+                true,
+            );
+            rt.add(
+                crate::revision::Revision::from("4-r_cde").unwrap(),
+                crate::revision::Revision::from("3-aaa_cde").ok(),
+                true,
+            );
+            rt.add(
+                crate::revision::Revision::from("4-xyz_cde").unwrap(),
+                crate::revision::Revision::from("3-xyz_cde").ok(),
+                true,
+            );
+            rt.add(
+                crate::revision::Revision::from("1-abc").unwrap(),
+                None,
+                true,
+            );
+            rt.add(
+                crate::revision::Revision::from("2-abc_cde").unwrap(),
+                crate::revision::Revision::from("1-abc").ok(),
+                true,
+            );
+            rt.validate();
+            let l = rt.get_leafs();
+            assert!(l.len() == 2);
+            assert!(l.contains(&crate::revision::Revision::from("3-abc_cde").unwrap()));
+            assert!(l.contains(&crate::revision::Revision::from("4-xyz_cde").unwrap()));
+            let w = rt.get_winner().unwrap();
+            assert_eq!(&crate::revision::Revision::from("4-xyz_cde").unwrap(), w);
+        }
     }
 }
