@@ -15,7 +15,7 @@
 // along with this program.  If not,ls see <http://www.gnu.org/licenses/>.
 use crate::revision::Revision;
 use impl_tools::autoimpl;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 #[autoimpl(PartialEq, Eq, PartialOrd, Ord ignore self.staging)]
 #[autoimpl(Debug, Clone)]
@@ -101,44 +101,66 @@ impl RevisionTree {
     pub fn validate(&mut self) {
         self.leafs_cache.clear();
         self.winner_cache = None;
-        let mut parents = HashSet::new();
-        for entry in self.revisions.values() {
-            if let Some(p) = entry.get_parent() {
-                if self.revisions.contains_key(p) {
-                    parents.insert(p.clone());
-                }
-            }
-        }
+
+        let mut validity_cache = std::collections::HashMap::new();
+
+        let parents: HashSet<&Revision> = self
+            .revisions
+            .values()
+            .filter_map(|e| e.get_parent().as_ref())
+            .filter(|p| self.revisions.contains_key(*p))
+            .collect();
+
+        let mut new_leafs = Vec::new();
+
         for r in self.revisions.keys() {
-            if parents.contains(r) {
+            if parents.contains(r) || r.is_resolved() {
                 continue;
             }
-            if r.is_resolved() {
-                continue;
-            }
-            if self.is_valid(r) {
-                self.leafs_cache.insert(r.clone());
+
+            if self.is_valid_cached(r, &mut validity_cache) {
+                new_leafs.push(r.clone());
             }
         }
+
+        self.leafs_cache.extend(new_leafs);
+
         self.winner_cache = self.leafs_cache.iter().max().cloned();
         self.state = ValidationState::Validated;
     }
 
-    fn is_valid(&self, rev: &Revision) -> bool {
+    fn is_valid_cached<'a>(
+        &'a self,
+        rev: &'a Revision,
+        cache: &mut HashMap<&'a Revision, bool>,
+    ) -> bool {
+        if let Some(&v) = cache.get(rev) {
+            return v;
+        }
+        let mut path = Vec::new();
         let mut r = rev;
-        loop {
+        let result = loop {
+            if let Some(&v) = cache.get(r) {
+                break v;
+            }
+            path.push(r);
             let entry = match self.revisions.get(r) {
                 Some(e) => e,
-                None => return false,
+                None => break false,
             };
             if r.index() == 1 && entry.get_parent().is_none() {
-                return true;
+                break true;
             }
             match entry.get_parent() {
                 Some(p) => r = p,
-                None => return false,
+                None => break false,
             }
+        };
+        for node in path {
+            cache.insert(node, result);
         }
+
+        result
     }
 
     pub fn get_leafs(&self) -> &BTreeSet<Revision> {
