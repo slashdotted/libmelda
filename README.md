@@ -20,7 +20,7 @@ melda = { git = "https://github.com/slashdotted/libmelda" }
 or
 
 ```
-melda = "0.5.9"
+melda = "0.6.0"
 ```
 
 If using the [crate](https://crates.io/crates/melda)  from [crates.io](https://crates.io/crates/melda) adapt the version string as needed. Then import the required modules. For this example you will need:
@@ -164,17 +164,17 @@ let info = json!({ "author" : "Alice", "description" : "First commit" })
 	.clone();
 let commit_result = m.commit(Some(info));
 ```
-The result of the **commit** is either an error, **None** if there were no changes to be committed or **Some(BTreeSet<String>)** if changes were committed: the set contains the identifier of the committed block.
+The result of the **commit** is either an error, **None** if there were no changes to be committed or **Some(BTreeSet<String>)** if changes were committed: the set contains the identifier of the commit.
 Upon success, on disk (in the **todolist** directory) the following content should have been created:
 ```
 todolist/
-├── 49
-│   └── 49ccea4d5797250208edf9bc5d0b89edf23c30a61f5cb3fafb87069f07276a62.delta
-└── b4
-    └── b4e50e445542c4737f4cfd7a9193ffd3be3794049d361d114a44f36434257cb3.pack
+├── 1-
+│   └── 1-3a3d61c94e50b2536d6e96db99038a7d77ad0f14f21eb43e47f2a56ae9a87851.delta
+└── 10
+    └── 10e9fd7c18288e276a7f915f33961c200809cd64bde5e4efed3c8f78df856f15.pack
 ```
 
-The **.delta** file is called **delta block**, and contains the versioning information of each object in the CRDT, whereas the **.pack** file is the **data pack** which stores the actual JSON content of each object. Each commit produces a new delta block (with a different name, which corresponds to the hash digest of its content) and possibly a data pack (if new JSON values are produced). The directory structure of the **todolist** directory organizes files into sub-directories according to their prefix.
+The **.delta** file is called **delta block**, and contains the versioning information of each object in the CRDT, whereas the **.pack** file is the **data pack** which stores the actual JSON content of each object. Each commit produces a new delta block (with a different name, which corresponds to a monotonically increasing index and the hash digest of its content) and possibly a data pack (if new JSON values are produced). The directory structure of the **todolist** directory organizes files into sub-directories according to their prefix.
 
 We can perform another update using (again) the **update** method and commit the resulting changes:
 ```rust
@@ -196,14 +196,14 @@ let commit_result = m.commit(Some(info));
 The changes will reflect on disk (with new packs and blocks created in the corresponding directories):
 ```
 todolist/
-├── 2b
-│   └── 2b0a463fcba92d5cf7dae531a5c40b67aaa0f45ab351c15613534fb5bba28564.pack
-├── 49
-│   └── 49ccea4d5797250208edf9bc5d0b89edf23c30a61f5cb3fafb87069f07276a62.delta
-├── b4
-│   └── b4e50e445542c4737f4cfd7a9193ffd3be3794049d361d114a44f36434257cb3.pack
-└── b6
-    └── b6297035f06f13186160577099759dea843addcd1fbd05d24da87d9ac071da3b.delta
+├── 1-
+│   └── 1-86af1e7ca997fce221c1be4879c6aa6def05292fee2a68ebec2968b34fc68f63.delta
+├── 2-
+│   └── 2-ff4743314387fbd33fb3053c5dcf7ad9638056021f590de0c845431297f009d4.delta
+├── 95
+│   └── 95700d1e005a6b07cd8f11602c0b7d07d50f60bd2cedfea1dc08896d59a3f9b8.pack
+└── ec
+    └── ec6c2a01d0f3c76af042cab5a83b0f81fc84901da5b5f03776713aff881ee3fb.pack
 ```
 ## Reading the data
 
@@ -412,10 +412,9 @@ Amos Brocco "Delta-State JSON CRDT: Putting Collaboration on Solid Ground". (Bri
 amos _dot_ brocco _at_ supsi _dot_ ch
 
 # License
-(c)2021-2025 Amos Brocco,
+(c)2021-2026 Amos Brocco,
 GPL v3 (for now... but I will evaluate a change of license - to something like BSD3/MIT/... in the near future)
 
 # Acknowledgements
 
 Many thanks to @ngortheone (documentation updates, examples)
-Ena

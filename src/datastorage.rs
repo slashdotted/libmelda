@@ -159,10 +159,6 @@ impl DataStorage {
         }
     }
 
-    pub fn get_loaded_packs(&self) -> &BTreeSet<String> {
-        &self.loaded_packs
-    }
-
     pub fn refresh(&mut self) -> Result<Vec<String>> {
         let pack_list = self.adapter.read().unwrap().list_objects(PACK_EXTENSION)?;
         let index_list = self.adapter.read().unwrap().list_objects(INDEX_EXTENSION)?;

@@ -27,45 +27,164 @@ use crate::utils::{
     make_diff_patch, merge_arrays, unflatten,
 };
 use anyhow::{anyhow, bail, Result};
+use lazy_static::lazy_static;
 use lru::LruCache;
 use rayon::prelude::*;
+use regex::Regex;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::fmt;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex, RwLock};
 
-/// Change triple (used for storing block changesets)
+/// Change triple (used for storing delta changesets)
 #[derive(PartialEq, Clone)]
-struct Change(String, Revision, Option<Revision>);
+pub struct Change(String, Revision, Option<Revision>);
+
+lazy_static! {
+    static ref DELTA_ID: Regex =
+        Regex::new(&(r"(?P<index>\d+)-(?P<digest>\w+)(\".to_owned() + DELTA_EXTENSION + ")?"))
+            .unwrap();
+}
+
+#[derive(PartialEq, Clone, Debug)]
+pub struct DeltaId(u32, String);
+
+impl DeltaId {
+    pub fn digest(&self) -> &String {
+        &self.1
+    }
+
+    pub fn index(&self) -> u32 {
+        self.0
+    }
+
+    pub fn new(digest: String) -> DeltaId {
+        DeltaId(1, digest)
+    }
+
+    pub fn new_from_anchors(digest: String, anchors: &BTreeSet<DeltaId>) -> DeltaId {
+        let idx = anchors.iter().map(|a| a.index()).max().unwrap_or(0) + 1;
+        DeltaId(idx, digest)
+    }
+
+    pub fn from(s: &str) -> Result<DeltaId> {
+        match DELTA_ID.captures(s) {
+            Some(r) => Ok(DeltaId(
+                r.name("index").unwrap().as_str().parse::<u32>().unwrap(),
+                r.name("digest").unwrap().as_str().to_string(),
+            )),
+            None => bail!("invalid_deltaid_string: {}", s),
+        }
+    }
+
+    pub fn key(&self) -> String {
+        self.to_string() + DELTA_EXTENSION
+    }
+}
+
+/// Equality
+impl Eq for DeltaId {}
+
+/// Partial Ordering
+impl PartialOrd for DeltaId {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Full Ordering
+impl Ord for DeltaId {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        if self.0 < other.0 {
+            std::cmp::Ordering::Less
+        } else if self.0 > other.0 {
+            std::cmp::Ordering::Greater
+        } else {
+            self.1.cmp(&other.1)
+        }
+    }
+}
+
+/// Conversion to a string
+impl fmt::Display for DeltaId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}-{}", self.0, &self.1)
+    }
+}
 
 /// Melda is a Delta-State CRDT for arbitrary JSON documents.
 pub struct Melda {
     documents: RwLock<BTreeMap<String, Mutex<RevisionTree>>>,
     data: RwLock<DataStorage>,
-    blocks: RwLock<BTreeMap<String, RwLock<Block>>>,
+    deltas: RwLock<BTreeMap<DeltaId, RwLock<Delta>>>,
     array_descriptors_cache: Mutex<LruCache<Revision, ArrayDescriptor>>,
 }
 
 #[derive(PartialEq, Copy, Clone, Debug)]
 
-/// Status of a cblock
+/// Status of a cdelta
 enum Status {
     Unknown,
     Valid,
-    ValidAndApplied, // For valid and applied blocks, changes is None
+    ValidAndApplied, // For valid and applied deltas, changes is None
     Invalid,
 }
 
-/// Block is a public structure representing a block. It is used to represent a block that has been correctly parsed.
+/// Delta is a public structure representing a delta. It is used to represent a delta that has been correctly parsed.
 
 #[derive(Clone)]
-pub struct Block {
-    pub id: String,
-    pub parents: Option<BTreeSet<String>>,
+pub struct Delta {
+    pub id: Option<DeltaId>,
+    pub parents: Option<BTreeSet<DeltaId>>,
     pub info: Option<Map<String, Value>>,
     pub packs: Option<BTreeSet<String>>,
     changes: Option<Vec<Change>>,
     status: Status,
+}
+
+impl Delta {
+    pub fn to_json(&self) -> Map<String, Value> {
+        let mut map = Map::new();
+
+        if let Some(changes) = &self.changes {
+            let mut vec = Vec::new();
+
+            for Change(uuid, rev, prev) in changes {
+                if let Some(prev) = prev {
+                    vec.push(Value::from(vec![
+                        uuid.clone(),
+                        prev.to_string(),
+                        rev.digest().clone(),
+                    ]));
+                } else {
+                    vec.push(Value::from(vec![uuid.clone(), rev.digest().clone()]));
+                }
+            }
+
+            map.insert(CHANGESETS_FIELD.to_string(), Value::from(vec));
+        }
+
+        if let Some(info) = &self.info {
+            map.insert(INFORMATION_FIELD.to_string(), Value::from(info.clone()));
+        }
+
+        if let Some(parents) = &self.parents {
+            let vec: Vec<String> = parents.iter().map(|p| p.to_string()).collect();
+            map.insert(PARENTS_FIELD.to_string(), Value::from(vec));
+        }
+
+        if let Some(packs) = &self.packs {
+            let vec: Vec<String> = packs.iter().cloned().collect();
+            map.insert(PACK_FIELD.to_string(), Value::from(vec));
+        }
+
+        map
+    }
+
+    pub fn to_json_string(&self) -> Result<String> {
+        Ok(serde_json::to_string(&self.to_json())?)
+    }
 }
 
 // Array descriptor represents an array descriptor. It is used to support reconstruction of delta descriptors
@@ -197,7 +316,7 @@ impl Melda {
         let dc = Melda {
             documents: RwLock::new(BTreeMap::<String, Mutex<RevisionTree>>::new()),
             data: RwLock::new(DataStorage::new(adapter.clone())),
-            blocks: RwLock::new(BTreeMap::new()),
+            deltas: RwLock::new(BTreeMap::new()),
             array_descriptors_cache: Mutex::new(LruCache::<Revision, ArrayDescriptor>::new(
                 NonZeroUsize::new(cache_size).unwrap(),
             )),
@@ -228,7 +347,7 @@ impl Melda {
         let dc = Melda {
             documents: RwLock::new(BTreeMap::<String, Mutex<RevisionTree>>::new()),
             data: RwLock::new(DataStorage::new(adapter.clone())),
-            blocks: RwLock::new(BTreeMap::new()),
+            deltas: RwLock::new(BTreeMap::new()),
             array_descriptors_cache: Mutex::new(LruCache::<Revision, ArrayDescriptor>::new(
                 NonZeroUsize::new(cache_size).unwrap(),
             )),
@@ -243,12 +362,12 @@ impl Melda {
         data.get_adapter()
     }
 
-    /// Initializes a new Melda data structure using the provided adapter and loads until the given block
+    /// Initializes a new Melda data structure using the provided adapter and loads until the given delta
     ///
     /// # Arguments
     ///
     /// * `adapter` - The backend adapter used to persist the data on commit
-    /// * `block` - Block identifier
+    /// * `delta` - Delta identifier
     ///
     /// # Example
     /// ```
@@ -279,7 +398,7 @@ impl Melda {
     /// ```
     pub fn new_until(
         adapter: Arc<RwLock<Box<dyn Adapter>>>,
-        anchors: &BTreeSet<String>,
+        anchors: &BTreeSet<DeltaId>,
     ) -> Result<Melda> {
         let cache_size = std::env::var("MELDA_ARRAYDESCRIPTORS_CACHE_CAP")
             .unwrap_or_else(|_| "16".to_string())
@@ -288,7 +407,7 @@ impl Melda {
         let dc = Melda {
             documents: RwLock::new(BTreeMap::<String, Mutex<RevisionTree>>::new()),
             data: RwLock::new(DataStorage::new(adapter.clone())),
-            blocks: RwLock::new(BTreeMap::new()),
+            deltas: RwLock::new(BTreeMap::new()),
             array_descriptors_cache: Mutex::new(LruCache::<Revision, ArrayDescriptor>::new(
                 NonZeroUsize::new(cache_size).unwrap(),
             )),
@@ -297,15 +416,15 @@ impl Melda {
         Ok(dc)
     }
 
-    /// Initializes a new Melda data structure using the provided Url and loads until the given block
+    /// Initializes a new Melda data structure using the provided Url and loads until the given delta
     ///
     /// # Arguments
     ///
     /// * `url` - The backend Url used to persist the data on commit
-    /// * `block` - Block identifier
+    /// * `delta` - Delta identifier
     ///
     /// ```
-    pub fn new_from_url_until(url: &str, anchors: &BTreeSet<String>) -> Result<Melda> {
+    pub fn new_from_url_until(url: &str, anchors: &BTreeSet<DeltaId>) -> Result<Melda> {
         let cache_size = std::env::var("MELDA_ARRAYDESCRIPTORS_CACHE_CAP")
             .unwrap_or_else(|_| "16".to_string())
             .parse::<u32>()
@@ -314,7 +433,7 @@ impl Melda {
         let dc = Melda {
             documents: RwLock::new(BTreeMap::<String, Mutex<RevisionTree>>::new()),
             data: RwLock::new(DataStorage::new(adapter.clone())),
-            blocks: RwLock::new(BTreeMap::new()),
+            deltas: RwLock::new(BTreeMap::new()),
             array_descriptors_cache: Mutex::new(LruCache::<Revision, ArrayDescriptor>::new(
                 NonZeroUsize::new(cache_size).unwrap(),
             )),
@@ -596,12 +715,12 @@ impl Melda {
         }
     }
 
-    // TODO: Maybe we could use the same logic for commit and stage / apply_block and replay_stage
-    // for in both we create or apply a block
-    // in commit we need to clear the stage afterwards and we need to write the pack and the block
+    // TODO: Maybe we could use the same logic for commit and stage / apply_delta and replay_stage
+    // for in both we create or apply a delta
+    // in commit we need to clear the stage afterwards and we need to write the pack and the delta
 
     /// Commits changes to the backend adapter and returns the set of anchors (containing the identifier
-    /// of the committed block)
+    /// of the committed delta)
     ///
     /// # Arguments
     ///
@@ -637,7 +756,7 @@ impl Melda {
     pub fn commit(
         &self,
         information: Option<Map<String, Value>>,
-    ) -> Result<Option<BTreeSet<String>>> {
+    ) -> Result<Option<BTreeSet<DeltaId>>> {
         // If there is nothing staged, skip commit
         if !self.has_staging() {
             return Ok(None);
@@ -655,69 +774,80 @@ impl Melda {
             }
         }
         // Commit data packs
-        let mut block = Map::<String, Value>::new();
         let mut data: std::sync::RwLockWriteGuard<'_, DataStorage> =
             self.data.write().expect("cannot_acquire_data_for_writing");
-        let _packid = data.pack()?;
+        let packid = data.pack()?;
+
         // Process stage
-        let mut changes = Vec::<Value>::new();
+
+        let mut changes = Vec::<Change>::new();
+
         for (uuid, rt) in self.documents.read().unwrap().iter() {
             let rt_rw = rt.lock().expect("cannot_acquire_revision_tree_for_commit");
+
             if rt_rw.has_staging() {
-                rt_rw.get_revisions().iter().for_each(|(rev, rte)| {
+                for (rev, rte) in rt_rw.get_revisions().iter() {
                     if rte.is_staging() {
                         if rte.get_parent().is_none() {
                             // Creation record
-                            let tuple = vec![uuid.clone(), rev.digest().clone()];
-                            changes.push(Value::from(tuple));
+                            changes.push(Change(uuid.clone(), rev.clone(), None));
                         } else {
                             // Update record
-                            let triple = vec![
-                                uuid.clone(),
-                                rte.get_parent().as_ref().unwrap().to_string(),
-                                rev.digest().clone(),
-                            ];
-                            changes.push(Value::from(triple));
+                            let parent = rte.get_parent().as_ref().unwrap().clone();
+                            changes.push(Change(uuid.clone(), rev.clone(), Some(parent)));
                         }
                     }
-                })
+                }
             }
         }
-        block.insert(CHANGESETS_FIELD.to_string(), Value::from(changes));
-        // Insert information object
-        if let Some(information) = information {
-            block.insert(INFORMATION_FIELD.to_string(), Value::from(information));
-        }
-        // Insert anchors
-        let anchors_blocks = self.get_anchors();
-        if !anchors_blocks.is_empty() {
-            let anchors_blocks: Vec<String> =
-                anchors_blocks.iter().map(|bid| bid.to_string()).collect();
-            block.insert(PARENTS_FIELD.to_string(), Value::from(anchors_blocks));
-        }
-        // Insert pack indentifer
-        if let Some(pid) = _packid {
-            let packs = vec![pid];
-            block.insert(PACK_FIELD.to_string(), Value::from(packs));
-        }
-        let blockstr = serde_json::to_string(&block).unwrap();
-        let block_hash = digest_string(&blockstr);
-        let blockid = block_hash.clone() + DELTA_EXTENSION;
-        data.write_raw_item(&blockid, blockstr.as_bytes())?;
-        // Load the block
+
+        let changes = if changes.is_empty() {
+            None
+        } else {
+            Some(changes)
+        };
+
+        let anchors = self.get_anchors();
+        let parents = if anchors.is_empty() {
+            None
+        } else {
+            Some(anchors.clone())
+        };
+
+        let packs = packid.map(|pid| BTreeSet::from([pid]));
+
+        let mut delta = Delta {
+            id: None,
+            parents,
+            info: information,
+            packs,
+            changes,
+            status: Status::ValidAndApplied,
+        };
+
+        let deltajson = delta.to_json_string()?;
+        let digest = digest_string(&deltajson);
+        let deltaid = if anchors.is_empty() {
+            DeltaId::new(digest)
+        } else {
+            DeltaId::new_from_anchors(digest, &anchors)
+        };
+        // Write the data on the backend
+        data.write_raw_item(&deltaid.key(), deltajson.as_bytes())?;
         drop(data);
-        let mut b = self.parse_raw_block(block_hash.clone(), block).unwrap();
-        b.status = Status::ValidAndApplied;
-        self.blocks
+        // Assign the Delta identifier
+        delta.id = Some(deltaid.clone());
+        // Store the delta
+        self.deltas
             .write()
             .unwrap()
-            .insert(block_hash.clone(), RwLock::new(b));
+            .insert(deltaid.clone(), RwLock::new(delta));
         // Commit changes
         for (_, rt) in self.documents.read().unwrap().iter() {
             let mut rt_rw = rt.lock().expect("cannot_acquire_revision_tree_for_commit");
             rt_rw.commit();
         }
-        let anchors = BTreeSet::from([block_hash]);
+        let anchors = BTreeSet::from([deltaid]);
         Ok(Some(anchors))
     }
 
@@ -813,7 +943,7 @@ impl Melda {
         }
     }
 
-    /// Returns a set of the current anchor blocks (blocks that have not been referenced as parents)
+    /// Returns a set of the current anchor deltas (deltas that have not been referenced as parents)
     ///
     /// # Example
     /// ```
@@ -832,20 +962,20 @@ impl Melda {
     /// assert!(anchors.len() == 1);
     /// assert!(anchors == committed_anchors);
     /// ```
-    pub fn get_anchors(&self) -> BTreeSet<String> {
-        let blocks_r = self.blocks.read().unwrap();
-        // Return the identifiers of all blocks which are not referenced as parents
-        let mut anchors: BTreeSet<String> = blocks_r
+    pub fn get_anchors(&self) -> BTreeSet<DeltaId> {
+        let deltas_r = self.deltas.read().unwrap();
+        // Return the identifiers of all deltas which are not referenced as parents
+        let mut anchors: BTreeSet<DeltaId> = deltas_r
             .iter()
-            .filter(|(_, block)| block.read().unwrap().status == Status::ValidAndApplied)
+            .filter(|(_, delta)| delta.read().unwrap().status == Status::ValidAndApplied)
             .map(|(k, _)| k.clone())
             .collect();
-        blocks_r
+        deltas_r
             .iter()
-            .filter(|(_, block)| block.read().unwrap().status == Status::ValidAndApplied)
+            .filter(|(_, delta)| delta.read().unwrap().status == Status::ValidAndApplied)
             .for_each(|(_, b)| {
-                let block_r = b.read().unwrap();
-                if let Some(pr) = &block_r.parents {
+                let delta_r = b.read().unwrap();
+                if let Some(pr) = &delta_r.parents {
                     for p in pr {
                         anchors.remove(p);
                     }
@@ -854,7 +984,7 @@ impl Melda {
         anchors
     }
 
-    /// Reloads the CRDT (reloads all delta blocks)
+    /// Reloads the CRDT (reloads all delta deltas)
     ///
     /// # Example
     /// ```
@@ -887,43 +1017,42 @@ impl Melda {
             .write()
             .expect("failed_to_acquire_documents_for_writing")
             .clear();
-        // Read block list
+        // Read delta list
         let data = self.data.read().expect("cannot_acquire_data_for_reading");
         let list_str = data.list_raw_items(DELTA_EXTENSION)?;
         drop(data);
-        self.blocks.write().unwrap().clear();
+        self.deltas.write().unwrap().clear();
         // Reload data storage
         let mut data = self.data.write().expect("cannot_acquire_data_for_writing");
         data.reload()?;
         drop(data);
-        // Clear the blocks
-        self.blocks.write().unwrap().clear();
-        // Fetch and parse blocks
+        // Clear the deltas
+        self.deltas.write().unwrap().clear();
+        // Fetch and parse deltas
         if !list_str.is_empty() {
             for i in &list_str {
-                if let Ok(block) = self.fetch_raw_block(i) {
-                    if let Ok(block) = self.parse_raw_block(i.to_string(), block) {
-                        self.blocks
-                            .write()
-                            .unwrap()
-                            .insert(i.to_string(), RwLock::new(block));
+                if let Ok(bid) = DeltaId::from(i) {
+                    if let Ok(delta) = self.fetch_raw_delta(&bid) {
+                        if let Ok(delta) = self.parse_raw_delta(&bid, delta) {
+                            self.deltas.write().unwrap().insert(bid, RwLock::new(delta));
+                        }
                     }
                 }
             }
         }
-        // Mark valid blocks
-        self.mark_valid_blocks();
-        // Apply all valid blocks
-        self.blocks.read().unwrap().iter().for_each(|(_, block)| {
-            let status = block.read().unwrap().status;
+        // Mark valid deltas
+        self.mark_valid_deltas();
+        // Apply all valid deltas
+        self.deltas.read().unwrap().iter().for_each(|(_, delta)| {
+            let status = delta.read().unwrap().status;
             if status == Status::Valid {
-                let block_r = block.read().unwrap();
-                if self.apply_block(&block_r).is_ok() {
-                    drop(block_r);
-                    let mut block_w = block.write().unwrap();
-                    block_w.status = Status::ValidAndApplied;
+                let delta_r = delta.read().unwrap();
+                if self.apply_delta(&delta_r).is_ok() {
+                    drop(delta_r);
+                    let mut delta_w = delta.write().unwrap();
+                    delta_w.status = Status::ValidAndApplied;
                     // We can drop the changes vector
-                    block_w.changes = None;
+                    delta_w.changes = None;
                 }
             }
         });
@@ -936,7 +1065,7 @@ impl Melda {
         Ok(())
     }
 
-    /// Loads newly available blocks
+    /// Loads newly available deltas
     ///
     /// # Example
     /// ```
@@ -964,7 +1093,7 @@ impl Melda {
         if self.has_staging() {
             bail!("stage_not_empty")
         }
-        // 1. Get new list of blocks
+        // 1. Get new list of deltas
         let data_r = self.data.read().expect("cannot_acquire_data_for_writing");
         let list_str = data_r.list_raw_items(DELTA_EXTENSION)?;
         drop(data_r);
@@ -972,66 +1101,68 @@ impl Melda {
         let mut data_w = self.data.write().expect("cannot_acquire_data_for_writing");
         data_w.refresh()?;
         drop(data_w);
-        // 3. Load new blocks
+        // 3. Load new deltas
         if !list_str.is_empty() {
             for i in &list_str {
-                let is_new_block = !self
-                    .blocks
-                    .read()
-                    .expect("cannot_acquire_blocks_for_reading")
-                    .contains_key(i);
-                if is_new_block {
-                    if let Ok(block) = self.fetch_raw_block(i) {
-                        if let Ok(block) = self.parse_raw_block(i.to_string(), block) {
-                            self.blocks
-                                .write()
-                                .expect("cannot_acquire_blocks_for_writing")
-                                .insert(i.to_string(), RwLock::new(block));
+                if let Ok(d) = DeltaId::from(i) {
+                    let is_new_delta = !self
+                        .deltas
+                        .read()
+                        .expect("cannot_acquire_deltas_for_reading")
+                        .contains_key(&d);
+                    if is_new_delta {
+                        if let Ok(delta) = self.fetch_raw_delta(&d) {
+                            if let Ok(delta) = self.parse_raw_delta(&d, delta) {
+                                self.deltas
+                                    .write()
+                                    .expect("cannot_acquire_deltas_for_writing")
+                                    .insert(d, RwLock::new(delta));
+                            }
                         }
                     }
                 }
             }
         }
-        // 4. Turn invalid blocks into unknown status blocks
-        let blocks_r = self
-            .blocks
+        // 4. Turn invalid deltas into unknown status deltas
+        let deltas_r = self
+            .deltas
             .read()
-            .expect("cannot_acquire_blocks_for_reading");
-        blocks_r.par_iter().for_each(|(_, block)| {
-            let status = block
+            .expect("cannot_acquire_deltas_for_reading");
+        deltas_r.par_iter().for_each(|(_, delta)| {
+            let status = delta
                 .read()
-                .expect("cannot_acquire_block_for_reading")
+                .expect("cannot_acquire_delta_for_reading")
                 .status;
             if status == Status::Invalid {
-                block
+                delta
                     .write()
-                    .expect("cannot_acquire_block_for_writing")
+                    .expect("cannot_acquire_delta_for_writing")
                     .status = Status::Unknown;
             }
         });
-        drop(blocks_r);
-        // 5. Mark valid blocks
-        self.mark_valid_blocks();
-        // 6. Apply all valid blocks
-        let blocks_r = self
-            .blocks
+        drop(deltas_r);
+        // 5. Mark valid deltas
+        self.mark_valid_deltas();
+        // 6. Apply all valid deltas
+        let deltas_r = self
+            .deltas
             .read()
-            .expect("cannot_acquire_blocks_for_reading");
-        blocks_r.iter().for_each(|(_, block)| {
-            let block_r = block.read().expect("cannot_acquire_block_for_reading");
-            let status = block
+            .expect("cannot_acquire_deltas_for_reading");
+        deltas_r.iter().for_each(|(_, delta)| {
+            let delta_r = delta.read().expect("cannot_acquire_delta_for_reading");
+            let status = delta
                 .read()
-                .expect("cannot_acquire_block_for_reading")
+                .expect("cannot_acquire_delta_for_reading")
                 .status;
-            if status == Status::Valid && self.apply_block(&block_r).is_ok() {
-                drop(block_r);
-                let mut block_w = block.write().expect("cannot_acquire_block_for_writing");
-                block_w.status = Status::ValidAndApplied;
+            if status == Status::Valid && self.apply_delta(&delta_r).is_ok() {
+                drop(delta_r);
+                let mut delta_w = delta.write().expect("cannot_acquire_delta_for_writing");
+                delta_w.status = Status::ValidAndApplied;
                 // We can drop the changes vector
-                block_w.changes = None;
+                delta_w.changes = None;
             }
         });
-        drop(blocks_r);
+        drop(deltas_r);
         let all_docs = self.documents.read().unwrap();
         let rtrees: Vec<_> = all_docs.values().collect();
         rtrees.par_iter().for_each(|mtx| {
@@ -1041,11 +1172,11 @@ impl Melda {
         Ok(())
     }
 
-    /// Reloads the CRDT until the given block
+    /// Reloads the CRDT until the given delta
     ///
     /// # Arguments
     ///
-    /// * `block` - Block identifier
+    /// * `delta` - Delta identifier
     ///
     /// # Example
     /// ```
@@ -1074,7 +1205,7 @@ impl Melda {
     /// let winner = replica.get_winner("myobject").unwrap();
     /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
     /// ```
-    pub fn reload_until(&self, anchors: &BTreeSet<String>) -> Result<()> {
+    pub fn reload_until(&self, anchors: &BTreeSet<DeltaId>) -> Result<()> {
         if anchors.is_empty() {
             return self.reload();
         }
@@ -1089,7 +1220,7 @@ impl Melda {
         // Clear the documents
         documents_w.clear();
         drop(documents_w);
-        // Read block list
+        // Read delta list
         let data_r = self.data.write().expect("cannot_acquire_data_for_writing");
         let list_str = data_r.list_raw_items(DELTA_EXTENSION)?;
         drop(data_r);
@@ -1097,65 +1228,67 @@ impl Melda {
         let mut data_w = self.data.write().expect("cannot_acquire_data_for_writing");
         data_w.reload()?;
         drop(data_w);
-        // Clear the blocks
-        let mut blocks_w = self
-            .blocks
+        // Clear the deltas
+        let mut deltas_w = self
+            .deltas
             .write()
-            .expect("cannot_acquire_blocks_for_writing");
-        blocks_w.clear();
-        // Fetch and parse blocks
+            .expect("cannot_acquire_deltas_for_writing");
+        deltas_w.clear();
+        // Fetch and parse deltas
         if !list_str.is_empty() {
             for i in &list_str {
-                if let Ok(block) = self.fetch_raw_block(i) {
-                    if let Ok(block) = self.parse_raw_block(i.to_string(), block) {
-                        blocks_w.insert(i.to_string(), RwLock::new(block));
+                if let Ok(d) = DeltaId::from(i) {
+                    if let Ok(delta) = self.fetch_raw_delta(&d) {
+                        if let Ok(delta) = self.parse_raw_delta(&d, delta) {
+                            deltas_w.insert(d, RwLock::new(delta));
+                        }
                     }
                 }
             }
         }
-        drop(blocks_w);
-        // Mark valid blocks
-        self.mark_valid_blocks();
-        // Check if blocks are valid
-        let blocks_r = self
-            .blocks
+        drop(deltas_w);
+        // Mark valid deltas
+        self.mark_valid_deltas();
+        // Check if deltas are valid
+        let deltas_r = self
+            .deltas
             .read()
-            .expect("cannot_acquire_blocks_for_reading");
-        for block_id in anchors {
-            if !blocks_r.contains_key(block_id) {
+            .expect("cannot_acquire_deltas_for_reading");
+        for delta_id in anchors {
+            if !deltas_r.contains_key(delta_id) {
                 bail!(
-                    "reload_until_interrupted_block_not_found: {} {:?}",
-                    block_id,
-                    blocks_r.keys()
+                    "reload_until_interrupted_delta_not_found: {} {:?}",
+                    delta_id,
+                    deltas_r.keys()
                 );
             }
-            if blocks_r.get(block_id).unwrap().read().unwrap().status != Status::Valid {
-                bail!("reload_until_interrupted_invalid_block: {}", block_id);
+            if deltas_r.get(delta_id).unwrap().read().unwrap().status != Status::Valid {
+                bail!("reload_until_interrupted_invalid_delta: {}", delta_id);
             }
         }
-        // Apply block and parents
+        // Apply delta and parents
         let mut to_apply = VecDeque::new();
-        for block_id in anchors {
-            to_apply.push_back(block_id.to_string());
+        for delta_id in anchors {
+            to_apply.push_back(delta_id.clone());
         }
         while !to_apply.is_empty() {
             let bid = to_apply.pop_front().unwrap();
-            let block_item = blocks_r.get(&bid).unwrap();
-            let block_r = block_item.read().expect("cannot_acquire_block_for_reading");
-            let status = block_r.status;
-            if status == Status::Valid && self.apply_block(&block_r).is_ok() {
-                if let Some(parents) = &block_r.parents {
+            let delta_item = deltas_r.get(&bid).unwrap();
+            let delta_r = delta_item.read().expect("cannot_acquire_delta_for_reading");
+            let status = delta_r.status;
+            if status == Status::Valid && self.apply_delta(&delta_r).is_ok() {
+                if let Some(parents) = &delta_r.parents {
                     for b in parents {
-                        to_apply.push_back(b.to_string());
+                        to_apply.push_back(b.clone());
                     }
                 }
-                drop(block_r);
-                let mut block_w = block_item
+                drop(delta_r);
+                let mut delta_w = delta_item
                     .write()
-                    .expect("cannot_acquire_block_for_writing");
-                block_w.status = Status::ValidAndApplied;
+                    .expect("cannot_acquire_delta_for_writing");
+                delta_w.status = Status::ValidAndApplied;
                 // We can drop the changes vector
-                block_w.changes = None;
+                delta_w.changes = None;
             }
         }
         let all_docs = self.documents.read().unwrap();
@@ -1182,7 +1315,7 @@ impl Melda {
     /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner = replica.get_winner("myobject").unwrap();
     /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
-    /// let block_id = replica.commit(None).unwrap().unwrap();
+    /// let delta_id = replica.commit(None).unwrap().unwrap();
     /// replica.delete_object("myobject");
     /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner = replica.get_winner("myobject").unwrap();
@@ -1216,7 +1349,7 @@ impl Melda {
         Ok(())
     }
 
-    /// Melds another Melda into this one. Only committed items (delta blocks and data packs) are melded.
+    /// Melds another Melda into this one. Only committed items (delta deltas and data packs) are melded.
     ///
     /// # Arguments
     ///
@@ -1244,11 +1377,11 @@ impl Melda {
     /// assert!(replica2.get_all_objects().contains("myobject"));
     /// let winner = replica2.get_winner("myobject").unwrap();
     /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
-    /// let block_id = committed_anchors.first().unwrap();
-    /// let block2 = replica2.get_block(&block_id).unwrap().unwrap();
-    /// let block = replica.get_block(&block_id).unwrap().unwrap();
-    /// assert_eq!(block_id, &block.id);
-    //// assert_eq!(block_id, &block2.id);
+    /// let delta_id = committed_anchors.first().unwrap();
+    /// let delta2 = replica2.get_delta(&delta_id).unwrap().unwrap();
+    /// let delta = replica.get_delta(&delta_id).unwrap().unwrap();
+    /// assert_eq!(delta_id, &delta.id.unwrap());
+    /// assert_eq!(delta_id, &delta2.id.unwrap());
     pub fn meld(&self, other: &Melda) -> Result<Vec<String>> {
         let mut result = vec![];
         let other_data = other.data.read().unwrap();
@@ -1462,7 +1595,7 @@ impl Melda {
     /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner = replica.get_winner("myobject").unwrap();
     /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
-    /// let block_id = replica.commit(None).unwrap().unwrap();
+    /// let delta_id = replica.commit(None).unwrap().unwrap();
     /// let adapter2 : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
     /// let adapter2 = Arc::new(RwLock::new(adapter2));
     /// let mut replica2 = Melda::new(adapter2.clone()).expect("cannot_initialize_crdt");
@@ -1508,7 +1641,7 @@ impl Melda {
     /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner = replica.get_winner("myobject").unwrap();
     /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
-    /// let block_id = replica.commit(None).unwrap().unwrap();
+    /// let delta_id = replica.commit(None).unwrap().unwrap();
     /// replica.delete_object("myobject");
     /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner = replica.get_winner("myobject").unwrap();
@@ -1619,7 +1752,7 @@ impl Melda {
     /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner = replica.get_winner("myobject").unwrap();
     /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
-    /// let block_id = replica.commit(None).unwrap().unwrap();
+    /// let delta_id = replica.commit(None).unwrap().unwrap();
     /// let adapter2 : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
     /// let adapter2 = Arc::new(RwLock::new(adapter2));
     /// let mut replica2 = Melda::new(adapter2.clone()).expect("cannot_initialize_crdt");
@@ -1729,7 +1862,7 @@ impl Melda {
     /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner = replica.get_winner("myobject").unwrap();
     /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
-    /// let block_id = replica.commit(None).unwrap().unwrap();
+    /// let delta_id = replica.commit(None).unwrap().unwrap();
     /// replica.delete_object("myobject");
     /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner = replica.get_winner("myobject").unwrap();
@@ -1804,11 +1937,11 @@ impl Melda {
     /// assert!(!replica.has_staging());
     /// replica.create_object("myobject", object.clone());  
     /// assert!(replica.has_staging());
-    /// let block_id = replica.commit(None).unwrap().unwrap();
+    /// let delta_id = replica.commit(None).unwrap().unwrap();
     /// assert!(!replica.has_staging());
     /// replica.update_object("myobject", object2.clone());
     /// assert!(replica.has_staging());
-    /// let block_id2 = replica.commit(None).unwrap().unwrap();
+    /// let delta_id2 = replica.commit(None).unwrap().unwrap();
     /// assert!(!replica.has_staging());
     /// replica.delete_object("myobject");
     /// assert!(replica.has_staging());
@@ -1840,7 +1973,7 @@ impl Melda {
     /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner = replica.get_winner("myobject").unwrap();
     /// assert_eq!("1-e8e7db1ed2e2e9b7360c9216b8f21353e37ec0365c3d95c51a1302759da9e196", winner);
-    /// let block_id = replica.commit(None).unwrap().unwrap();
+    /// let delta_id = replica.commit(None).unwrap().unwrap();
     /// replica.delete_object("myobject");
     /// assert!(replica.get_all_objects().contains("myobject"));
     /// let winner = replica.get_winner("myobject").unwrap();
@@ -1926,7 +2059,7 @@ impl Melda {
                                             .contains_key(uuid)
                                         {
                                             // FIXME: Should this be allowed?
-                                            // This might happen if we save the stage, then reload to a previous block
+                                            // This might happen if we save the stage, then reload to a previous delta
                                             // were an object did not yet exist and then try to re-apply the stage
                                             let mut rt = RevisionTree::new();
                                             rt.add(r, Some(prev), true);
@@ -1960,11 +2093,11 @@ impl Melda {
         }
     }
 
-    /// Returns a block, or None if the block does not exist.
+    /// Returns a delta, or None if the delta does not exist.
     ///
     /// # Arguments
     ///
-    /// * `block_id` - Block identifier
+    /// * `delta_id` - Delta identifier
     ///
     /// # Example
     /// ```
@@ -1980,18 +2113,18 @@ impl Melda {
     /// let parent = replica.get_parent_revision("myobject", &winner).unwrap();
     /// assert!(parent.is_none());
     /// let committed_anchors = replica.commit(None).unwrap().unwrap();
-    /// let block_id = committed_anchors.first().unwrap();
-    /// let block = replica.get_block(&block_id).unwrap().unwrap();
-    /// assert_eq!(block_id, &block.id);
-    pub fn get_block(&self, block_id: &str) -> Result<Option<Block>> {
-        let blocks_r = self
-            .blocks
+    /// let delta_id = committed_anchors.first().unwrap();
+    /// let delta = replica.get_delta(&delta_id).unwrap().unwrap();
+    /// assert_eq!(delta_id, &delta.id.unwrap());
+    pub fn get_delta(&self, delta_id: &DeltaId) -> Result<Option<Delta>> {
+        let deltas_r = self
+            .deltas
             .read()
-            .expect("cannot_acquire_blocks_for_reading");
-        match blocks_r.get(block_id) {
+            .expect("cannot_acquire_deltas_for_reading");
+        match deltas_r.get(delta_id) {
             Some(b) => {
-                let block_r = b.read().expect("cannot_acquire_block_for_reading");
-                Ok(Some(block_r.clone()))
+                let delta_r = b.read().expect("cannot_acquire_delta_for_reading");
+                Ok(Some(delta_r.clone()))
             }
             None => Ok(None),
         }
@@ -2017,7 +2150,7 @@ impl Melda {
     /// let winner = replica.get_winner("myobject").unwrap();
     /// let parent = replica.get_parent_revision("myobject", &winner).unwrap();
     /// assert!(parent.is_none());
-    /// let block_id = replica.commit(None).unwrap().unwrap();
+    /// let delta_id = replica.commit(None).unwrap().unwrap();
     /// replica.delete_object("myobject");
     /// let newrev = replica.get_winner("myobject").unwrap();
     /// assert_eq!("2-d_e5d1d20", newrev);
@@ -2111,95 +2244,115 @@ impl Melda {
     // **********************************************************************
     // **********************************************************************
     //
-    // DELTA BLOCK SUPPORT FUNCTIONS
+    // DELTA DELTA SUPPORT FUNCTIONS
     //
     // **********************************************************************
     // **********************************************************************
 
-    // Fetch a block and verify digest
-    fn fetch_raw_block(&self, blockid: &str) -> Result<Map<String, Value>> {
-        let object = blockid.to_string() + DELTA_EXTENSION;
+    // Fetch a delta and verify digest
+    fn fetch_raw_delta(&self, deltaid: &DeltaId) -> Result<Map<String, Value>> {
+        let object = deltaid.key();
         let data = self.data.read().expect("cannot_acquire_data_for_reading");
         let data = data.read_raw_item(object.as_str(), 0, 0)?;
         let digest = digest_bytes(data.as_slice());
-        if !digest.eq(blockid) {
-            bail!("mismatching_block_hash");
+        if !digest.eq(deltaid.digest()) {
+            bail!("mismatching_delta_hash");
         }
         let json = std::str::from_utf8(&data)?;
         let json: Value = serde_json::from_str(json)?;
         if !json.is_object() {
-            bail!("invalid_block_format");
+            bail!("invalid_delta_format");
         }
-        let blockobj = json.as_object().unwrap();
-        Ok(blockobj.clone())
+        let deltaobj = json.as_object().unwrap();
+        Ok(deltaobj.clone())
     }
 
-    /// Parse a block
-    fn parse_raw_block(&self, b_id: String, raw_block: Map<String, Value>) -> Result<Block> {
-        // Block values
+    /// Parse a delta
+    fn parse_raw_delta(&self, b_id: &DeltaId, raw_delta: Map<String, Value>) -> Result<Delta> {
+        // Delta values
         let mut b_parents: Option<BTreeSet<String>> = None;
         let mut b_info: Option<Map<String, Value>> = None;
         let mut b_packs: Option<BTreeSet<String>> = None;
         let mut b_changes: Option<Vec<Change>> = None;
-        // Parse raw block fields
-        if raw_block.contains_key(CHANGESETS_FIELD) {
-            if raw_block.contains_key(PACK_FIELD) {
-                let packs = raw_block
-                    .get(PACK_FIELD)
-                    .ok_or_else(|| anyhow!("missing_pack_reference"))
-                    .unwrap()
-                    .as_array()
-                    .ok_or_else(|| anyhow!("packs_not_an_array"))?;
-                if !packs.iter().all(|x| {
-                    if x.is_string() {
-                        let data = self.data.read().expect("cannot_acquire_data_for_reading");
-                        data.is_readable_and_valid_pack(x.as_str().unwrap())
-                            .unwrap_or(false)
-                    } else {
-                        false
-                    }
-                }) {
-                    bail!("missing_packs");
-                }
-                // Collect identifiers
-                if !packs.is_empty() {
-                    b_packs = Some(
-                        packs
-                            .iter()
-                            .map(|p| p.as_str().unwrap().to_string())
-                            .collect(),
-                    );
+        let data = self.data.read().expect("cannot_acquire_data_for_reading");
+
+        // Parse raw delta fields
+        if raw_delta.contains_key(INFORMATION_FIELD) {
+            let info = raw_delta
+                .get(INFORMATION_FIELD)
+                .ok_or_else(|| anyhow!("missing_root_id"))?;
+            if !info.is_object() {
+                bail!("info_not_an_object");
+            }
+            // Save identifier
+            b_info = Some(info.as_object().unwrap().clone());
+        }
+        if raw_delta.contains_key(PARENTS_FIELD) {
+            let parents = raw_delta
+                .get(PARENTS_FIELD)
+                .ok_or_else(|| anyhow!("missing_parents_field"))?;
+            if !parents.is_array() {
+                bail!("parents_not_an_array");
+            }
+            let mut ps = BTreeSet::new();
+            for p in parents.as_array().unwrap() {
+                if p.is_string() {
+                    ps.insert(p.as_str().unwrap().to_string());
                 }
             }
-            if raw_block.contains_key(INFORMATION_FIELD) {
-                let info = raw_block
-                    .get(INFORMATION_FIELD)
-                    .ok_or_else(|| anyhow!("missing_root_id"))?;
-                if !info.is_object() {
-                    bail!("info_not_an_object");
-                }
-                // Save identifier
-                b_info = Some(info.as_object().unwrap().clone());
+            // Save parents
+            if !ps.is_empty() {
+                b_parents = Some(ps);
             }
-            if raw_block.contains_key(PARENTS_FIELD) {
-                let parents = raw_block
-                    .get(PARENTS_FIELD)
-                    .ok_or_else(|| anyhow!("missing_parents_field"))?;
-                if !parents.is_array() {
-                    bail!("parents_not_an_array");
-                }
-                let mut ps = BTreeSet::new();
-                for p in parents.as_array().unwrap() {
-                    if p.is_string() {
-                        ps.insert(p.as_str().unwrap().to_string());
-                    }
-                }
-                // Save parents
-                if !ps.is_empty() {
-                    b_parents = Some(ps);
-                }
+        }
+        // Check if the delta identifier matches with the content
+        let (expected_bid, anchors) = if let Some(p) = b_parents {
+            let anchors: Result<BTreeSet<_>, _> = p.iter().map(|o| DeltaId::from(o)).collect();
+            if let Ok(anchors) = anchors {
+                (
+                    DeltaId::new_from_anchors(b_id.digest().clone(), &anchors),
+                    Some(anchors),
+                )
+            } else {
+                bail!("invalid_parent_block_identifiers")
             }
-            let changes = raw_block.get(CHANGESETS_FIELD);
+        } else {
+            (DeltaId::new(b_id.digest().clone()), None)
+        };
+        if !expected_bid.eq(b_id) {
+            bail!("delta_identifier_does_not_match")
+        }
+        // Check if referenced packs exist
+        if raw_delta.contains_key(PACK_FIELD) {
+            let packs = raw_delta
+                .get(PACK_FIELD)
+                .ok_or_else(|| anyhow!("missing_pack_reference"))
+                .unwrap()
+                .as_array()
+                .ok_or_else(|| anyhow!("packs_not_an_array"))?;
+            if !packs.iter().all(|x| {
+                if x.is_string() {
+                    data.is_readable_and_valid_pack(x.as_str().unwrap())
+                        .unwrap_or(false)
+                } else {
+                    false
+                }
+            }) {
+                bail!("missing_packs");
+            }
+            // Collect identifiers
+            if !packs.is_empty() {
+                b_packs = Some(
+                    packs
+                        .iter()
+                        .map(|p| p.as_str().unwrap().to_string())
+                        .collect(),
+                );
+            }
+        }
+
+        if raw_delta.contains_key(CHANGESETS_FIELD) {
+            let changes = raw_delta.get(CHANGESETS_FIELD);
             if let Some(changes) = changes {
                 if changes.is_array() {
                     // Process changeset
@@ -2215,10 +2368,17 @@ impl Melda {
                                 let digest = record[1]
                                     .as_str()
                                     .ok_or_else(|| anyhow!("expecting_digest_string"))?;
+
                                 let r = Revision::new(1, digest.to_string(), None);
+                                if !data.is_readable_and_valid_revision(&r) {
+                                    bail!("record_references_unavailable_data")
+                                }
                                 cs.push(Change(uuid.to_string(), r, None));
                             } else if record.len() == 3 {
                                 // Update record
+                                if anchors.is_none() {
+                                    bail!("update_record_found_in_origin_delta")
+                                }
                                 let uuid = record[0]
                                     .as_str()
                                     .ok_or_else(|| anyhow!("expecting_uuid_string"))?;
@@ -2234,6 +2394,12 @@ impl Melda {
                                     digest.to_string(),
                                     Some(&prev),
                                 );
+                                if !data.is_readable_and_valid_revision(&r) {
+                                    bail!("record_references_unavailable_data")
+                                }
+                                if !data.is_readable_and_valid_revision(&prev) {
+                                    bail!("record_references_unavailable_data")
+                                }
                                 cs.push(Change(uuid.to_string(), r, Some(prev)));
                             } else {
                                 bail!("invalid_changes_record")
@@ -2246,9 +2412,10 @@ impl Melda {
                 }
             }
         }
-        Ok(Block {
-            id: b_id,
-            parents: b_parents,
+
+        Ok(Delta {
+            id: Some(b_id.clone()),
+            parents: anchors,
             info: b_info,
             packs: b_packs,
             changes: b_changes,
@@ -2256,76 +2423,43 @@ impl Melda {
         })
     }
 
-    fn check_block(&self, bid: &str) -> Status {
-        let blocks = self.blocks.read().unwrap();
-        let data = self.data.read().expect("cannot_acquire_data_for_reading");
-        let packs = data.get_loaded_packs();
-        if let Some(block) = blocks.get(bid) {
-            // If the block status has been determined return the corresponding value
-            let mut status = block.read().unwrap().status;
+    fn check_delta(&self, delta_id: &DeltaId) -> Status {
+        let deltas = self.deltas.read().unwrap();
+        if let Some(delta) = deltas.get(delta_id) {
+            // If the delta status has been determined return the corresponding value
+            let mut status = delta.read().unwrap().status;
             if status != Status::Unknown {
                 return status;
             }
-            // Verify that all packs are available
             status = Status::Valid;
-            if let Some(pks) = &block.read().unwrap().packs {
-                if !pks.par_iter().all(|pack| packs.contains(pack)) {
-                    status = Status::Invalid;
-                }
-            };
-            // Verify that if changesets contain update records the block has at least one parent
-            if let Some(changes) = &block.read().unwrap().changes {
-                if changes.iter().any(|change| change.2.is_some())
-                    && block.read().unwrap().parents.is_none()
+            // Verify that all parent deltas are valid
+            if let Some(parents) = &delta.read().unwrap().parents {
+                if !parents
+                    .iter()
+                    .all(|parent| self.check_delta(parent) != Status::Invalid)
                 {
                     status = Status::Invalid;
                 }
-            };
-            // Verify that all changes are referencing revisions that are available in the data store
-            if let Some(changes) = &block.read().unwrap().changes {
-                if !changes.par_iter().all(|change| {
-                    if let Some(rev) = &change.2 {
-                        data.is_readable_and_valid_revision(rev)
-                            && data.is_readable_and_valid_revision(&change.1)
-                    } else {
-                        data.is_readable_and_valid_revision(&change.1)
-                    }
-                }) {
-                    status = Status::Invalid;
-                };
-            };
-            // Note: causal consistency is verified by validating revision trees. Only updates that trace back
-            // to an initial (creation) revision are kept
-            if status == Status::Valid {
-                // Verify that all parent blocks are status
-                if let Some(parents) = &block.read().unwrap().parents {
-                    if !parents
-                        .iter()
-                        .all(|parent| self.check_block(parent) != Status::Invalid)
-                    {
-                        status = Status::Invalid;
-                    }
-                };
             }
-            block.write().unwrap().status = status;
+            delta.write().unwrap().status = status;
             status
         } else {
             Status::Invalid
         }
     }
 
-    fn mark_valid_blocks(&self) {
-        let blocks = self.blocks.read().unwrap();
-        blocks.iter().for_each(|(bid, block)| {
-            let status = block.read().unwrap().status;
+    fn mark_valid_deltas(&self) {
+        let deltas = self.deltas.read().unwrap();
+        deltas.iter().for_each(|(bid, delta)| {
+            let status = delta.read().unwrap().status;
             if status == Status::Unknown {
-                self.check_block(bid);
+                self.check_delta(bid);
             }
         });
     }
 
-    fn apply_block(&self, block: &Block) -> Result<()> {
-        if let Some(changes) = &block.changes {
+    fn apply_delta(&self, delta: &Delta) -> Result<()> {
+        if let Some(changes) = &delta.changes {
             for change in changes {
                 let Change(uuid, r, prev) = change;
                 let mut docs_w = self
