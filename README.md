@@ -397,6 +397,9 @@ In the [Kibi](https://github.com/slashdotted/kibi) repository you will find an e
 
 # Publications
 
+## 2026
+Amos Brocco "A Composable CRDT Layer for Byzantine-Resilient Deterministic Reconstruction ", [arXiv:TBD](https://arxiv.org/)
+
 ## 2025
 Amos Brocco "Introducing Support for Move Operations in Melda CRDT", [arXiv:2503.04811](https://arxiv.org/abs/2503.04811)
 
