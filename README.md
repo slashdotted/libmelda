@@ -395,6 +395,10 @@ In the [libmelda-benchmarks](https://github.com/slashdotted/libmelda-benchmarks)
 
 In the [Kibi](https://github.com/slashdotted/kibi) repository you will find an example of integration of Melda into a text-editor. There is also another project [libmelda-tools](https://github.com/slashdotted/libmelda-tools/) which implements a simple command line tool to update, read, and meld Melda structures.
 
+# Melda vs Automerge
+
+Melda differs significantly from systems such as [Automerge](https://automerge.org/). While Automerge is an *operation-based* CRDT that requires applications to adopt a specific data model and propagate operations, Melda is a *delta-state* CRDT that operates on serialized JSON snapshots. Instead of replacing the application's data structures, Melda only requires serialization and deserialization to JSON, allowing developers to keep their existing data model unchanged. Unlike Automerge, Melda does not require globally unique identifiers for replicas or instances. Furthermore, Melda is not primarily designed for fine-grained real-time synchronization; rather, it follows a *save-and-refresh* model based on explicit checkpoints (commits), which can also be cryptographically signed using extensions such as [`libmelda-sec`](https://github.com/slashdotted/libmelda-sec). Finally, Melda provides a flexible storage architecture through pluggable backends (adapters), enabling data to be stored in memory, on filesystems, or other custom storage systems.
+
 # Publications
 
 ## 2026
