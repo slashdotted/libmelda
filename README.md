@@ -8,6 +8,9 @@ Melda natively supports the JSON data format and provides a way to synchronize c
 
 There is also a very early stage library, called [melda-sec](https://github.com/slashdotted/libmelda-sec) which implements a secure layer for Melda: delta blocks can be signed for additional security and changes to objects can be prevented using role based policies.
 
+# Opportunistic Synchronization
+
+Melda enables *opportunistic synchronization* by decoupling data consistency from the communication layer. Instead of relying on a dedicated synchronization protocol or persistent network connections, Melda treats delta blocks and data packs as immutable files that can be exchanged through any existing storage or synchronization mechanism, such as OneDrive, Dropbox, Git, or even manual file transfer. As a result, applications can become collaborative without requiring custom backend infrastructure: replicas simply *commit* changes locally and later *refresh* their state when new data becomes available. This model supports offline-first workflows and asynchronous collaboration, while still guaranteeing deterministic convergence once updates are shared. 
 
 # How do I use Melda?
 
