@@ -34,8 +34,6 @@ pub const PATCH_DELETE: &str = r#"d"#;
 pub const PACK_EXTENSION: &str = r#".pack"#;
 /// Delta block extension
 pub const DELTA_EXTENSION: &str = r#".delta"#;
-/// Data pack index extension
-pub const INDEX_EXTENSION: &str = r#".index"#;
 /// Default root object identifier
 pub const ROOT_ID: &str = "\u{221A}";
 /// Parents field key (inside delta blocks)

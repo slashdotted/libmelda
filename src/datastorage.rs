@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 use crate::adapter::Adapter;
-use crate::constants::{HASH_FIELD, INDEX_EXTENSION, PACK_EXTENSION};
+use crate::constants::{HASH_FIELD, PACK_EXTENSION};
 use crate::revision::Revision;
 use crate::utils::digest_bytes;
 use anyhow::{anyhow, bail, Result};
@@ -23,7 +23,7 @@ use serde_json::json;
 use serde_json::Map;
 use serde_json::Value;
 use std::collections::BTreeSet;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -33,7 +33,6 @@ pub struct DataStorage {
     committed_objects: HashMap<String, (String, usize, usize)>,
     loaded_packs: BTreeSet<String>,
     cache: Mutex<LruCache<String, Map<String, Value>>>,
-    allow_indices: bool,
 }
 
 impl DataStorage {
@@ -51,7 +50,6 @@ impl DataStorage {
             cache: Mutex::new(LruCache::<String, Map<String, Value>>::new(
                 NonZeroUsize::new(cache_size).unwrap(),
             )),
-            allow_indices: false, // FIXME: indices are disabled for now, because they can be malicious and point to non-existing packs or wrong offsets
         }
     }
 
@@ -90,36 +88,6 @@ impl DataStorage {
         Ok(())
     }
 
-    /// Loads an index object
-    fn load_index_object(&mut self, index: &str, obj: &Map<String, Value>) -> Result<()> {
-        for (k, v) in obj {
-            let d = v.as_array().unwrap();
-            let offset = d[0].as_i64().unwrap() as usize;
-            let count = d[1].as_i64().unwrap() as usize;
-            self.committed_objects
-                .insert(k.clone(), (index.to_string(), offset, count));
-        }
-        self.loaded_packs.insert(index.to_string());
-        Ok(())
-    }
-
-    /// Loads an index file
-    fn load_index(&mut self, index: &str) -> Result<()> {
-        let object = index.to_string() + INDEX_EXTENSION;
-        let data = self
-            .adapter
-            .read()
-            .unwrap()
-            .read_object(object.as_str(), 0, 0)?;
-        let json = std::str::from_utf8(&data)?;
-        let json: Value = serde_json::from_str(json)?;
-        if json.is_object() {
-            self.load_index_object(index, json.as_object().unwrap())
-        } else {
-            bail!("index_not_an_object")
-        }
-    }
-
     /// Reloads the storage
     /// TODO: This can be partially replaced by a call to refresh
     /// FIXME: Indices have been disabled to avoid issues with malicious indices,
@@ -130,50 +98,26 @@ impl DataStorage {
         }
         self.loaded_packs.clear();
         self.committed_objects.clear();
-        if self.allow_indices {
-            let pack_list = self.adapter.read().unwrap().list_objects(PACK_EXTENSION)?;
-            let index_list = self.adapter.read().unwrap().list_objects(INDEX_EXTENSION)?;
-            let index_set = index_list.into_iter().collect::<HashSet<_>>();
-            if !pack_list.is_empty() {
-                for i in &pack_list {
-                    if index_set.contains(i) {
-                        // If the index is available, load it (it will also load the pack)
-                        // This is more efficient than loading the pack and then the index, because the index is smaller
-                        // but if the index is malicious, it can point to a pack that is not valid, so we need to check the pack anyway
-                        // For example, an index can say that a digest exists or is at a certain offset, but the pack can be missing or the digest can be different
-                        self.load_index(i)?;
-                    } else {
-                        self.load_pack(i)?;
-                    }
-                }
+        let pack_list = self.adapter.read().unwrap().list_objects(PACK_EXTENSION)?;
+        if !pack_list.is_empty() {
+            for i in &pack_list {
+                self.load_pack(i)?;
             }
-            Ok(pack_list)
-        } else {
-            let pack_list = self.adapter.read().unwrap().list_objects(PACK_EXTENSION)?;
-            if !pack_list.is_empty() {
-                for i in &pack_list {
-                    self.load_pack(i)?;
-                }
-            }
-            Ok(pack_list)
         }
+        Ok(pack_list)
     }
 
     pub fn refresh(&mut self) -> Result<Vec<String>> {
         let pack_list = self.adapter.read().unwrap().list_objects(PACK_EXTENSION)?;
-        let index_list = self.adapter.read().unwrap().list_objects(INDEX_EXTENSION)?;
-        let index_set = index_list.into_iter().collect::<HashSet<_>>();
         let mut new_packs = vec![];
         if !pack_list.is_empty() {
             for i in &pack_list {
                 if self.loaded_packs.contains(i) {
                     continue;
                 }
-                if index_set.contains(i) {
-                    self.load_index(i)?;
-                } else {
-                    self.load_pack(i)?;
-                }
+
+                self.load_pack(i)?;
+
                 new_packs.push(i.clone());
             }
         }
@@ -199,10 +143,8 @@ impl DataStorage {
 
     /// Returns true if the revision is available and valid (digest matches)
     pub fn is_readable_and_valid_revision(&self, rev: &Revision) -> bool {
-        if rev.is_empty() || rev.is_deleted() || rev.is_resolved() || rev.is_charcode() {
+        if self.committed_objects.contains_key(rev.digest()) {
             true
-        } else if !self.allow_indices {
-            self.committed_objects.contains_key(rev.digest())
         } else {
             matches!(self.read_object(rev), Ok(_obj))
         }
@@ -284,7 +226,7 @@ impl DataStorage {
         if self.stage.is_empty() {
             return Ok(None);
         }
-        let mut index_map = Map::<String, Value>::new();
+        let mut index_map = HashMap::<String, (usize, usize)>::new();
         let mut buf = Vec::<u8>::new();
         let mut start: usize = 1;
         buf.push(b'[');
@@ -293,7 +235,7 @@ impl DataStorage {
             let content = serde_json::to_string(&v).unwrap();
             let bytes = content.as_bytes();
             buf.extend_from_slice(bytes);
-            index_map.insert(digest.clone(), json!([start, bytes.len()]));
+            index_map.insert(digest.clone(), (start, bytes.len()));
             remaining -= 1;
             if remaining > 0 {
                 buf.push(b',');
@@ -306,17 +248,12 @@ impl DataStorage {
         let adapter = self.adapter.write().unwrap();
         adapter.write_object(&pack_key, buf.as_slice())?;
         drop(adapter);
-        if buf.len() > 800 * index_map.len() {
-            // 80 bytes is the estimated size of an index entry, use index only if the size is 10 times bigger
-            // Only write the index if worth it
-            let index_key = pack_digest.clone() + INDEX_EXTENSION;
-            let index_map_contents = serde_json::to_string(&index_map).unwrap();
-            let adapter = self.adapter.write().unwrap();
-            adapter.write_object(&index_key, index_map_contents.as_bytes())?;
-            drop(adapter);
-        }
-        // load_index_object will update loaded_packs
-        self.load_index_object(&pack_digest, &index_map)?;
+        index_map.iter().for_each(|(key, (start, length))| {
+            self.committed_objects.insert(
+                key.clone(),
+                (pack_digest.clone(), start.to_owned(), length.to_owned()),
+            );
+        });
         self.stage.clear();
         Ok(Some(pack_digest))
     }
