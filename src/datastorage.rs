@@ -213,12 +213,17 @@ impl DataStorage {
     pub fn read_raw_value(&self, digest: &str) -> Result<Value> {
         if let Some(value) = self.committed_objects.get(digest) {
             let (pack, offset, length) = value;
-            let key = pack.clone() + PACK_EXTENSION;
+            let key = format!("{}{}", pack, PACK_EXTENSION);
             let data = self
                 .adapter
                 .read()
                 .unwrap()
                 .read_object(&key, *offset, *length)?;
+            // Verify content
+            let computed = digest_bytes(&data);
+            if computed != digest {
+                return Err(anyhow!("corrupted_value"));
+            }
             let json = std::str::from_utf8(&data)?;
             let json: Value = serde_json::from_str(json)?;
             Ok(json)
