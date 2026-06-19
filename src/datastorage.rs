@@ -31,7 +31,7 @@ pub struct DataStorage {
     adapter: Arc<RwLock<Box<dyn Adapter>>>,
     stage: HashMap<String, Value>,
     committed_objects: HashMap<String, (String, usize, usize)>,
-    loaded_packs: BTreeSet<String>,
+    applied_pack_ids: BTreeSet<String>,
     cache: Mutex<LruCache<String, Map<String, Value>>>,
 }
 
@@ -46,26 +46,31 @@ impl DataStorage {
             adapter,
             stage: HashMap::<String, Value>::new(),
             committed_objects: HashMap::<String, (String, usize, usize)>::new(),
-            loaded_packs: BTreeSet::new(),
+            applied_pack_ids: BTreeSet::new(),
             cache: Mutex::new(LruCache::<String, Map<String, Value>>::new(
                 NonZeroUsize::new(cache_size).unwrap(),
             )),
         }
     }
 
-    /// Loads a pack file (and rebuilds the index)
-    fn load_pack(&mut self, pack: &str) -> Result<()> {
-        let object = pack.to_string() + PACK_EXTENSION;
-        let data = self
-            .adapter
-            .read()
-            .unwrap()
-            .read_object(object.as_str(), 0, 0)?;
-        self.load_pack_data(pack, &data)
+    /// Tries to load a pack file, returns its contents
+    pub fn try_load_pack(&self, pack: &str) -> Result<Vec<u8>> {
+        let pack_name = pack.to_string() + PACK_EXTENSION;
+        match self.adapter.read().unwrap().read_object(&pack_name, 0, 0) {
+            Ok(data) => {
+                let d = digest_bytes(data.as_slice());
+                if d.eq(pack) {
+                    Ok(data)
+                } else {
+                    Err(anyhow!("mismatching_digest"))
+                }
+            }
+            Err(e) => Err(e),
+        }
     }
 
-    /// Data is the raw string (we need to compute the offset and length of the object)
-    fn load_pack_data(&mut self, name: &str, data: &[u8]) -> Result<()> {
+    /// Parses and applies a pack
+    fn parse_and_apply_pack(&mut self, name: &str, data: &[u8]) -> Result<()> {
         let mut flag = 0;
         let mut obj_start = 0;
         for (offset, c) in data.iter().enumerate() {
@@ -84,24 +89,34 @@ impl DataStorage {
                 };
             }
         }
-        self.loaded_packs.insert(name.to_string());
+        self.applied_pack_ids.insert(name.to_string());
         Ok(())
+    }
+
+    /// Returns the set of loaded packs
+    pub fn applied_packs(&self) -> &BTreeSet<String> {
+        &self.applied_pack_ids
     }
 
     /// Reloads the storage
     /// TODO: This can be partially replaced by a call to refresh
-    /// FIXME: Indices have been disabled to avoid issues with malicious indices,
-    /// but this will make the reload slower
     pub fn reload(&mut self) -> Result<Vec<String>> {
         if !self.stage.is_empty() {
             bail!("non_empty_data_stage");
         }
-        self.loaded_packs.clear();
+        self.applied_pack_ids.clear();
         self.committed_objects.clear();
         let pack_list = self.adapter.read().unwrap().list_objects(PACK_EXTENSION)?;
         if !pack_list.is_empty() {
             for i in &pack_list {
-                self.load_pack(i)?;
+                match self.try_load_pack(i) {
+                    Ok(data) => {
+                        if self.parse_and_apply_pack(i, &data).is_err() {
+                            return Err(anyhow!("failed_to_apply_pack"));
+                        }
+                    }
+                    Err(e) => return Err(e),
+                }
             }
         }
         Ok(pack_list)
@@ -112,11 +127,17 @@ impl DataStorage {
         let mut new_packs = vec![];
         if !pack_list.is_empty() {
             for i in &pack_list {
-                if self.loaded_packs.contains(i) {
+                if self.applied_pack_ids.contains(i) {
                     continue;
                 }
-
-                self.load_pack(i)?;
+                match self.try_load_pack(i) {
+                    Ok(data) => {
+                        if self.parse_and_apply_pack(i, &data).is_err() {
+                            return Err(anyhow!("failed_to_apply_pack"));
+                        }
+                    }
+                    Err(e) => return Err(e),
+                }
 
                 new_packs.push(i.clone());
             }
@@ -127,18 +148,6 @@ impl DataStorage {
     pub fn unstage(&mut self) -> Result<()> {
         self.stage.clear();
         Ok(())
-    }
-
-    /// Returns true if the pack is readable and valid (digest matches)
-    pub fn is_readable_and_valid_pack(&self, pack: &str) -> Result<bool> {
-        let pack_name = pack.to_string() + PACK_EXTENSION;
-        match self.adapter.read().unwrap().read_object(&pack_name, 0, 0) {
-            Ok(data) => {
-                let d = digest_bytes(data.as_slice());
-                Ok(d.eq(pack))
-            }
-            Err(e) => Err(e),
-        }
     }
 
     /// Returns true if the revision is available and valid (digest matches)
@@ -254,6 +263,7 @@ impl DataStorage {
                 (pack_digest.clone(), start.to_owned(), length.to_owned()),
             );
         });
+        self.applied_pack_ids.insert(pack_digest.clone());
         self.stage.clear();
         Ok(Some(pack_digest))
     }

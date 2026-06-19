@@ -16,8 +16,8 @@
 use crate::adapter::Adapter;
 use crate::constants::{
     ARRAY_DESCRIPTOR_DELTA_ORDER_FIELD, ARRAY_DESCRIPTOR_ORDER_FIELD, CHANGESETS_FIELD,
-    DELTA_EXTENSION, ID_FIELD, INFORMATION_FIELD, OBJECTS_FIELD, PACK_FIELD, PARENTS_FIELD,
-    ROOT_ID,
+    DELTA_EXTENSION, ID_FIELD, INFORMATION_FIELD, OBJECTS_FIELD, PACK_EXTENSION, PACK_FIELD,
+    PARENTS_FIELD, ROOT_ID,
 };
 use crate::datastorage::DataStorage;
 use crate::revision::Revision;
@@ -1384,28 +1384,64 @@ impl Melda {
     /// assert_eq!(delta_id, &delta2.id.unwrap());
     pub fn meld(&self, other: &Melda) -> Result<Vec<String>> {
         let mut result = vec![];
-        let other_data = other.data.read().unwrap();
-        let other_items = other_data.list_raw_items("")?;
-        if !other_items.is_empty() {
-            let mut data = self.data.write().expect("cannot_acquire_data_for_writing");
-            let this_items = data.list_raw_items("")?;
-            let this_items: HashSet<String> = this_items.into_iter().collect();
-            for i in &other_items {
-                if !this_items.contains(i) {
-                    match other_data.read_raw_item(i, 0, 0) {
-                        Ok(bytes) => {
-                            if data.write_raw_item(i, bytes.as_slice()).is_err() {
-                                continue;
+
+        let other_data_r = other.data.read().unwrap();
+        // We only trust already loaded deltas
+        let other_delta_items = other
+            .deltas
+            .read()
+            .expect("cannot_acquire_deltas_for_reading");
+        // We only trust already loaded (and validated packs)
+        let other_pack_items = other_data_r.applied_packs();
+        let other_all_items: HashSet<String> =
+            other_data_r.list_raw_items("")?.into_iter().collect();
+
+        let mut data_w = self.data.write().expect("cannot_acquire_data_for_writing");
+        let deltas_r = self
+            .deltas
+            .read()
+            .expect("cannot_acquire_deltas_for_reading");
+        let all_items: HashSet<String> = data_w.list_raw_items("")?.into_iter().collect();
+
+        // Meld valid deltas
+        other_delta_items.iter().for_each(|(did, _delta)| {
+            if !deltas_r.contains_key(did) {
+                if let Ok(raw_delta) = other.fetch_raw_delta(did) {
+                    if let Ok(delta) = self.load_raw_delta(did, raw_delta) {
+                        if let Ok(json) = delta.to_json_string() {
+                            if data_w.write_raw_item(&did.key(), json.as_bytes()).is_ok() {
+                                result.push(did.key());
                             }
-                            result.push(i.clone());
-                        }
-                        Err(_) => {
-                            continue;
                         }
                     }
                 }
             }
-        }
+        });
+        other_pack_items.iter().for_each(|pid| {
+            // We can only trust already loaded packs (because they where parsed)
+            if !data_w.applied_packs().contains(pid) {
+                if let Ok(pack_content) = other_data_r.try_load_pack(pid) {
+                    let pack_key = pid.clone() + PACK_EXTENSION;
+                    if data_w.write_raw_item(&pack_key, &pack_content).is_ok() {
+                        result.push(pack_key);
+                    }
+                }
+            }
+        });
+        // Consider all other objects
+        other_all_items.iter().for_each(|item| {
+            if !item.ends_with(DELTA_EXTENSION)
+                && !item.ends_with(PACK_EXTENSION)
+                && !all_items.contains(item)
+            {
+                if let Ok(bytes) = other_data_r.read_raw_item(item, 0, 0) {
+                    if data_w.write_raw_item(item, bytes.as_slice()).is_ok() {
+                        result.push(item.clone());
+                    }
+                }
+            }
+        });
+
         Ok(result)
     }
 
@@ -2426,7 +2462,7 @@ impl Melda {
             let data = self.data.read().unwrap();
 
             for p in packs {
-                if !data.is_readable_and_valid_pack(p).unwrap_or(false) {
+                if data.try_load_pack(p).is_err() {
                     delta_w.status = Status::Blocked;
                     return Status::Blocked;
                 }
