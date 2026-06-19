@@ -1,10 +1,5 @@
-use std::{
-    any::Any,
-    sync::{Arc, RwLock},
-};
-
 // Melda - Delta State JSON CRDT
-// Copyright (C) 2021-2025 Amos Brocco <amos.brocco@supsi.ch>
+// Copyright (C) 2021-2026 Amos Brocco <amos.brocco@supsi.ch>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -19,6 +14,11 @@ use std::{
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 use anyhow::Result;
+
+use std::{
+    any::Any,
+    sync::{Arc, RwLock},
+};
 
 pub type DynAdapter = Arc<RwLock<Box<dyn Adapter>>>;
 
