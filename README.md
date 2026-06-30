@@ -405,6 +405,8 @@ Melda differs significantly from systems such as [Automerge](https://automerge.o
 # Publications
 
 ## 2026
+Amos Brocco "Decoupling Trust in Byzantine CRDTs: Fine-grained Post-Compromise Handling without Breaking Causality", [arXiv](https://arxiv.org)
+
 Amos Brocco "A Composable CRDT Layer for Byzantine-Resilient Deterministic Reconstruction ", [arXiv:2606.18966](https://arxiv.org/abs/2606.18966)
 
 ## 2025
