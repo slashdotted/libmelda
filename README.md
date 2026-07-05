@@ -402,6 +402,10 @@ In the [Kibi](https://github.com/slashdotted/kibi) repository you will find an e
 
 Melda differs significantly from systems such as [Automerge](https://automerge.org/). While Automerge is an *operation-based* CRDT that requires applications to adopt a specific data model and propagate operations, Melda is a *delta-state* CRDT that operates on serialized JSON snapshots. Instead of replacing the application's data structures, Melda only requires serialization and deserialization to JSON, allowing developers to keep their existing data model unchanged. Unlike Automerge, Melda does not require globally unique identifiers for replicas or instances. Furthermore, Melda is not primarily designed for fine-grained real-time synchronization; rather, it follows a *save-and-refresh* model based on explicit checkpoints (commits), which can also be cryptographically signed using extensions such as [`libmelda-sec`](https://github.com/slashdotted/libmelda-sec). Finally, Melda provides a flexible storage architecture through pluggable backends (adapters), enabling data to be stored in memory, on filesystems, or other custom storage systems.
 
+## Current Research Work: Trust Governance
+An experimental trust and governance layer for Melda is being developed in the https://github.com/slashdotted/melda-sec/tree/trust branch of https://github.com/slashdotted/melda-sec, a security-focused adapter framework for Melda.
+The prototype explores endorsement-based validation and a dual-CRDT architecture in which a Trust CRDT governs the trust configuration used to validate updates in a Data CRDT.
+
 # Publications
 
 ## 2026
