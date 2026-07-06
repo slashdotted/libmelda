@@ -984,6 +984,36 @@ impl Melda {
         anchors
     }
 
+/// Returns a set of the current deltas (deltas that have been applied)
+    ///
+    /// # Example
+    /// ```
+    /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
+    /// use std::sync::{Arc, Mutex, RwLock};
+    /// use serde_json::{Map, Value,json};
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let mut replica = Melda::new(Arc::new(RwLock::new(adapter))).expect("cannot_initialize_crdt");
+    /// let object = json!({ "somekey" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
+    /// replica.create_object("myobject", object);
+    /// let deltas = replica.get_deltas();
+    /// assert!(deltas.is_empty());
+    /// let committed_anchors = replica.commit(None).unwrap().unwrap();
+    /// let deltas = replica.get_deltas();
+    /// assert!(committed_anchors.len() == 1);
+    /// assert!(deltas.len() == 1);
+    /// assert!(deltas == committed_anchors);
+    /// ```
+    pub fn get_deltas(&self) -> BTreeSet<DeltaId> {
+        let deltas_r = self.deltas.read().unwrap();
+        // Return the identifiers of all deltas which are not referenced as parents
+        deltas_r
+            .iter()
+            .filter(|(_, delta)| delta.read().unwrap().status == Status::Applied)
+            .map(|(k, _)| k.clone())
+            .collect()
+    }
+
+
     /// Reloads the CRDT (reloads all delta deltas)
     ///
     /// # Example
