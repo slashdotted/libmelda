@@ -762,17 +762,21 @@ impl Melda {
             return Ok(None);
         }
         // Automatically resolve conflicts in array_descriptors
+        let mut to_be_resolved: Vec<(String, String)> = vec![];
         for (uuid, rt) in self.documents.read().unwrap().iter() {
             if is_array_descriptor(uuid) {
                 let rt_r = rt.lock().expect("cannot_acquire_revision_tree_for_commit");
                 let w = rt_r.get_winner().ok_or_else(|| anyhow!("no_winner"))?;
                 let l = rt_r.get_leafs();
                 if l.len() > 1 {
-                    self.resolve_as(uuid, w.to_string().as_str())
-                        .expect("cannot_automatically_resolve_array_descriptor_conflict");
+                    to_be_resolved.push((uuid.clone(), w.to_string()));
                 }
             }
         }
+        to_be_resolved.iter().for_each(|(uuid, w)| {
+            self.resolve_as(uuid, w.as_str())
+                .expect("cannot_automatically_resolve_array_descriptor_conflict");
+        });
         // Commit data packs
         let mut data: std::sync::RwLockWriteGuard<'_, DataStorage> =
             self.data.write().expect("cannot_acquire_data_for_writing");
@@ -984,7 +988,7 @@ impl Melda {
         anchors
     }
 
-/// Returns a set of the current deltas (deltas that have been applied)
+    /// Returns a set of the current deltas (deltas that have been applied)
     ///
     /// # Example
     /// ```
@@ -1012,7 +1016,6 @@ impl Melda {
             .map(|(k, _)| k.clone())
             .collect()
     }
-
 
     /// Reloads the CRDT (reloads all delta deltas)
     ///
