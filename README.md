@@ -23,7 +23,7 @@ melda = { git = "https://github.com/slashdotted/libmelda" }
 or
 
 ```
-melda = "0.6.4"
+melda = "0.6.7"
 ```
 
 If using the [crate](https://crates.io/crates/melda)  from [crates.io](https://crates.io/crates/melda) adapt the version string as needed. Then import the required modules. For this example you will need:
@@ -403,12 +403,13 @@ In the [Kibi](https://github.com/slashdotted/kibi) repository you will find an e
 Melda differs significantly from systems such as [Automerge](https://automerge.org/). While Automerge is an *operation-based* CRDT that requires applications to adopt a specific data model and propagate operations, Melda is a *delta-state* CRDT that operates on serialized JSON snapshots. Instead of replacing the application's data structures, Melda only requires serialization and deserialization to JSON, allowing developers to keep their existing data model unchanged. Unlike Automerge, Melda does not require globally unique identifiers for replicas or instances. Furthermore, Melda is not primarily designed for fine-grained real-time synchronization; rather, it follows a *save-and-refresh* model based on explicit checkpoints (commits), which can also be cryptographically signed using extensions such as [`libmelda-sec`](https://github.com/slashdotted/libmelda-sec). Finally, Melda provides a flexible storage architecture through pluggable backends (adapters), enabling data to be stored in memory, on filesystems, or other custom storage systems.
 
 ## Current Research Work: Trust Governance
-An experimental trust and governance layer for Melda is being developed in the [trust](https://github.com/slashdotted/libmelda-sec/tree/trust) branch of [libmelda-sec](https://github.com/slashdotted/libmelda-sec), a security-focused adapter framework for Melda.
-The prototype explores endorsement-based validation and a dual-CRDT architecture in which a Trust CRDT governs the trust configuration used to validate updates in a Data CRDT.
+An experimental trust and governance layer for Melda is being developed as [libmelda-sec](https://github.com/slashdotted/libmelda-sec), a security-focused adapter framework for Melda. The prototype explores endorsement-based validation and a dual-CRDT architecture in which a Trust CRDT governs the trust configuration used to validate updates in a Data CRDT.
 
 # Publications
 
 ## 2026
+Amos Brocco "A Dual-CRDT Architecture for Decentralized Trust Governance and Evolution", arxiv
+
 Amos Brocco "Decoupling Trust in Byzantine CRDTs: Fine-grained Post-Compromise Handling without Breaking Causality", [arXiv](https://arxiv.org)
 
 Amos Brocco "A Composable CRDT Layer for Byzantine-Resilient Deterministic Reconstruction ", [arXiv:2606.18966](https://arxiv.org/abs/2606.18966)
