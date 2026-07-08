@@ -408,9 +408,9 @@ An experimental trust and governance layer for Melda is being developed as [libm
 # Publications
 
 ## 2026
-Amos Brocco "A Dual-CRDT Architecture for Decentralized Trust Governance and Evolution", arxiv
+Amos Brocco "A Dual-CRDT Architecture for Decentralized Trust Governance and Evolution", [arxiv:2607.06068](https://arxiv.org/abs/2607.06068)
 
-Amos Brocco "Decoupling Trust in Byzantine CRDTs: Fine-grained Post-Compromise Handling without Breaking Causality", [arXiv](https://arxiv.org)
+Amos Brocco "Decoupling Trust in Byzantine CRDTs: Fine-grained Post-Compromise Handling without Breaking Causality", [arXiv:2606.31759](https://arxiv.org/abs/2606.31759)
 
 Amos Brocco "A Composable CRDT Layer for Byzantine-Resilient Deterministic Reconstruction ", [arXiv:2606.18966](https://arxiv.org/abs/2606.18966)
 
