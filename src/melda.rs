@@ -113,6 +113,12 @@ impl fmt::Display for DeltaId {
     }
 }
 
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Debug)]
+pub struct DeltaFork {
+    pub parent: DeltaId,
+    pub children: Vec<DeltaId>,
+}
+
 /// Melda is a Delta-State CRDT for arbitrary JSON documents.
 pub struct Melda {
     documents: RwLock<BTreeMap<String, Mutex<RevisionTree>>>,
@@ -1014,6 +1020,61 @@ impl Melda {
             .iter()
             .filter(|(_, delta)| delta.read().unwrap().status == Status::Applied)
             .map(|(k, _)| k.clone())
+            .collect()
+    }
+
+    /// Returns a set of the current forks in the delta history (only for deltas that have been applied)
+    ///
+    /// # Example
+    /// ```
+    /// use melda::{melda::Melda, adapter::Adapter, memoryadapter::MemoryAdapter};
+    /// use std::sync::{Arc, Mutex, RwLock};
+    /// use serde_json::{Map, Value,json};
+    /// let adapter : Box<dyn Adapter> = Box::new(MemoryAdapter::new());
+    /// let mut replica = Melda::new(Arc::new(RwLock::new(adapter))).expect("cannot_initialize_crdt");
+    /// let object = json!({ "somekey" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ] }).as_object().unwrap().clone();
+    /// replica.create_object("myobject", object);
+    /// let forks = replica.get_forks_in_delta_history();
+    /// assert!(forks.is_empty());
+    /// let committed_anchors = replica.commit(None).unwrap().unwrap();
+    /// let forks = replica.get_forks_in_delta_history();
+    /// assert!(committed_anchors.len() == 1);
+    /// replica.delete_object("myobject");
+    /// replica.commit(None).unwrap();
+    /// replica.reload_until(&committed_anchors).unwrap();
+    /// replica.update_object("myobject", json!({ "somekey" : [ "somedata", 1u32, 2u32, 3u32, 4u32 ], "otherkey" : "otherdata" }).as_object().unwrap().clone()).unwrap();
+    /// replica.commit(None).unwrap();
+    /// let forks = replica.get_forks_in_delta_history();
+    /// assert!(forks.is_empty());
+    /// replica.reload().unwrap();
+    /// assert!(replica.get_forks_in_delta_history().len() == 1);
+    /// assert!(replica.get_forks_in_delta_history().iter().next().unwrap().children.len() == 2);
+    /// assert!(replica.get_forks_in_delta_history().iter().next().unwrap().parent == committed_anchors.iter().next().unwrap().clone());
+    /// ```
+    pub fn get_forks_in_delta_history(&self) -> BTreeSet<DeltaFork> {
+        let mut parent_to_children: BTreeMap<DeltaId, Vec<DeltaId>> = BTreeMap::new();
+        let deltas_r = self.deltas.read().unwrap();
+        deltas_r
+            .iter()
+            .filter(|(_, delta)| delta.read().unwrap().status == Status::Applied)
+            .for_each(|(k, b)| {
+                let delta_r = b.read().unwrap();
+                if let Some(pr) = &delta_r.parents {
+                    for p in pr {
+                        parent_to_children
+                            .entry(p.clone())
+                            .or_default()
+                            .push(k.clone());
+                    }
+                }
+            });
+        parent_to_children
+            .iter()
+            .filter(|(_, children)| children.len() > 1)
+            .map(|(parent, children)| DeltaFork {
+                parent: parent.clone(),
+                children: children.clone(),
+            })
             .collect()
     }
 
